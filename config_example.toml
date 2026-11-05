@@ -1,0 +1,33 @@
+[transcription]
+api_key = "sk-or-v1-"
+model = "openai/whisper-large-v3-turbo"
+url = "https://openrouter.ai/api/v1/audio/transcriptions"
+language = "en"
+
+[chat]
+api_key = "sk-or-v1-"
+url = "https://openrouter.ai/api/v1/chat/completions"
+temperature = 0.7
+max_tokens = 4096
+# Separate budget for worker reasoning, tool calls, and search summaries.
+tool_max_tokens = 16384
+
+[tts]
+api_key = "sk-or-v1-"
+model = "heygen/heygen-voice-1-turbo"
+url = "https://openrouter.ai/api/v1/audio/speech"
+voice = "nadine"
+response_format = "pcm"
+
+[vad]
+path = "vad/silero_vad.bin"
+
+[ai]
+ai_name = "Zoe"
+user_name = "boss"
+
+model_fast = "~deepseek/deepseek-flash-latest:nitro"
+model_fast_reasoning = "none"
+
+model_smart = "~deepseek/deepseek-flash-latest"
+model_smart_reasoning = "medium"
