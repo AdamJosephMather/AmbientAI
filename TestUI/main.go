@@ -120,6 +120,11 @@ type Window struct {
 	scroll float32
 }
 
+type MicLine struct {
+	val float32
+	status MicStatus
+}
+
 type Game struct {
 	faceSource *text.GoTextFaceSource
 	face       *text.GoTextFace
@@ -146,18 +151,32 @@ type Game struct {
 	windows []Window
 	buttonToWindow map[int]int
 	
-	buddyBackground *ebiten.Image
-	buddyEyes       *ebiten.Image
-	buddyEyesClosed *ebiten.Image
-	buddySize       float32
-	buddyEyeWidth   float32
-	buddyEyeHeight  float32
-	timeTillClosed  int
-	timeTillEyesAtTarget int
-	eyesX float32
-	eyesY float32
-	eyesTargetX float32
-	eyesTargetY float32
+	micLines []MicLine
+	MicLineCount int
+}
+
+type MicStatus int
+const (
+	MicStatus404          MicStatus = iota
+	MicStatusListening
+	MicStatusThinking
+	MicStatusSpeaking
+)
+
+func (g *Game) UpdateListening(val float32, status MicStatus) {
+	mcLine := MicLine{
+		val,
+		status,
+	}
+	
+	if len(g.micLines) < g.MicLineCount {
+		g.micLines = append(g.micLines, mcLine)
+	}else{
+		for i := range(len(g.micLines)-1) {
+			g.micLines[i] = g.micLines[i+1]
+		}
+		g.micLines[len(g.micLines)-1] = mcLine
+	}
 }
 
 func CoordIn(x, y float32, rect Rect) bool {
@@ -475,20 +494,7 @@ func (g *Game) Update() error {
 		ebiten.SetCursorShape(ebiten.CursorShapeDefault)
 	}
 	
-	g.timeTillClosed -= 1
-	if g.timeTillClosed < -15 { // measured in frames
-		g.timeTillClosed = 10*60+rand.IntN(6*60)
-	}
-	
-	g.timeTillEyesAtTarget -= 1
-	if g.timeTillEyesAtTarget <= 0 {
-		g.eyesTargetX = float32(rand.IntN(int(g.buddyEyeWidth*2)))-g.buddyEyeWidth
-		g.eyesTargetY = float32(rand.IntN(int(g.buddyEyeWidth*2)))-g.buddyEyeWidth
-		g.timeTillEyesAtTarget = rand.IntN(3*60)+60
-	}else {
-		g.eyesX += (g.eyesTargetX-g.eyesX)/float32(g.timeTillEyesAtTarget)
-		g.eyesY += (g.eyesTargetY-g.eyesY)/float32(g.timeTillEyesAtTarget)
-	}
+	g.UpdateListening(rand.Float32(), MicStatusListening)
 	
 	return nil
 }
@@ -633,38 +639,43 @@ func (g *Game) DrawTextLine(screen *ebiten.Image, x, y float32, maxR Rect, todra
 	text.Draw(clippedScreen, todraw, g.face, op)
 }
 
-func (g *Game) DrawBuddy(screen *ebiten.Image) {
-	op := &ebiten.DrawImageOptions{}
-	op.GeoM.Scale(1, 1)
-	op.GeoM.Translate(20, 20)
-	screen.DrawImage(g.buddyBackground, op)
+func (g *Game) DrawMicLines(screen *ebiten.Image) {
+	offset := g.stripSize*2
+	lineW := g.textHeight/5
+	lineH := g.textHeight*2
 	
-	centerX := 20+g.buddySize/2
-	eyeY := 20+g.buddySize/2-g.buddyEyeHeight/2
-	
-	op = &ebiten.DrawImageOptions{}
-	op.GeoM.Scale(1, 1)
-	op.GeoM.Translate(float64(centerX - g.buddyEyeWidth * 1.5 + g.eyesX), float64(eyeY + g.eyesY))
-	if g.timeTillClosed <= 0 {
-		screen.DrawImage(g.buddyEyesClosed, op)
-	}else{
-		screen.DrawImage(g.buddyEyes, op)
+	fullRect := Rect{
+		-2*g.stripSize,
+		-2*g.stripSize,
+		lineW*float32(len(g.micLines))*2+offset*2+g.stripSize*2,
+		lineH+2*offset+g.stripSize*2,
 	}
+	inset := fullRect
+	inset.Inset(g.stripSize)
+	g.DrawBorder(screen, fullRect, g.stripSize, g.theme.borderColor)
 	
-	op = &ebiten.DrawImageOptions{}
-	op.GeoM.Scale(1, 1)
-	op.GeoM.Translate(float64(centerX + g.buddyEyeWidth * 0.5 + g.eyesX), float64(eyeY + g.eyesY))
-	if g.timeTillClosed <= 0 {
-		screen.DrawImage(g.buddyEyesClosed, op)
-	}else{
-		screen.DrawImage(g.buddyEyes, op)
+	for i,val := range(g.micLines) {
+		rect := Rect{
+			float32(i)*(2*lineW)+offset,
+			offset+(lineH-val.val*lineH)/2,
+			lineW,
+			val.val*lineH,
+		}
+		
+		if (val.status == MicStatusListening) {
+			g.DrawRect(screen, rect, g.theme.listeningColor)
+		}else if (val.status == MicStatusThinking) {
+			g.DrawRect(screen, rect, g.theme.thinkingColor)
+		}else if (val.status == MicStatusListening) {
+			g.DrawRect(screen, rect, g.theme.speakingColor)
+		}
 	}
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
 	fullRect := Rect{0, 0, float32(g.width), float32(g.height)}
 	g.DrawBackground(screen, fullRect, g.stripSize/2, g.rectWidth, g.theme.background, g.theme.backgroundLines)
-	g.DrawBuddy(screen)
+	g.DrawMicLines(screen)
 	
 	for i := range(g.windows) {
 		win := &g.windows[i]
@@ -685,7 +696,7 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 
 func (g *Game) SetupTheme() {
 	g.theme.background       = color.RGBA{R: 46,  G: 13,  B: 8,   A: 255}
-	g.theme.backgroundLines  = color.RGBA{R: 60,  G: 17,  B: 5,   A: 255}
+	g.theme.backgroundLines  = color.RGBA{R: 56,  G: 15,  B: 9,   A: 255}
 	g.theme.windowBackground = color.RGBA{R: 46,  G: 13,  B: 8,   A: 255}
 	g.theme.titleBackground  = color.RGBA{R: 122, G: 40,  B: 10,  A: 255}
 	g.theme.borderColor      = color.RGBA{R: 231, G: 164, B: 74,  A: 255}
@@ -693,7 +704,7 @@ func (g *Game) SetupTheme() {
 	g.theme.textColor        = color.RGBA{R: 253, G: 232, B: 172, A: 255}
 	g.theme.buttonHovering   = color.RGBA{R: 142, G: 60,  B: 30,  A: 255}
 	g.theme.buttonPressing   = color.RGBA{R: 102, G: 20,  B: 0,   A: 255}
-	g.theme.listeningColor   = color.RGBA{R: 255, G: 100, B: 100, A: 255}
+	g.theme.listeningColor   = color.RGBA{R: 255, G: 190, B: 100, A: 255}
 	g.theme.thinkingColor    = color.RGBA{R: 255, G: 180, B: 150, A: 255}
 	g.theme.speakingColor    = color.RGBA{R: 100, G: 100, B: 255, A: 255}
 	g.theme.sleepingColor    = color.RGBA{R: 100, G: 100, B: 100, A: 255}
@@ -722,108 +733,11 @@ func (g *Game) DrawCircle(screen *ebiten.Image, x, y, r float32, c color.Color) 
 	vector.FillCircle(screen, x, y, r, c, true)
 }
 
-func (g *Game) CreateBuddyBackground(radius float32) *ebiten.Image {
-	canvas := ebiten.NewImage(int(radius*2), int(radius*2))
-	canvas.Clear()
-	
-	g.buddySize      = radius*2
-	g.buddyEyeWidth  = radius/5
-	g.buddyEyeHeight = g.buddyEyeWidth*2
-
-	const shaderSrc = `//kage:unit pixels
-package main
-
-var Center vec2
-var Radius float
-var Inner float // fraction of radius that stays solid, e.g. 0.8
-var Color vec4  // straight (non-premultiplied) RGBA, 0..1
-
-func Fragment(dstPos vec4, srcPos vec2, _ vec4) vec4 {
-	d := distance(dstPos.xy, Center) / Radius
-	a := (1 - smoothstep(Inner, 1.0, d)) * Color.a
-	return vec4(Color.rgb*a, a) // output must be premultiplied
-}
-	`
-	
-	s, err := ebiten.NewShader([]byte(shaderSrc))
-	if err != nil {
-		log.Fatal(err)
-	}
-	
-	size := int(radius * 2)
-	op := &ebiten.DrawRectShaderOptions{
-		Uniforms: map[string]any{
-			"Center": []float32{radius, radius}, // in dst pixel coords
-			"Radius": radius,
-			"Inner":  float32(0.7),
-			"Color":  []float32{255.0 / 255, 109.0 / 255, 20.0 / 255, 1},
-		},
-	}
-	canvas.DrawRectShader(size, size, s, op)
-	
-	bright  := color.NRGBA{R: 255, G: 233, B: 114, A: 255}
-	darker  := color.NRGBA{R: 251, G: 116, B: 8,  A: 255}
-	darkest := color.NRGBA{R: 63,  G: 14,  B: 0,  A: 255}
-	
-	g.DrawCircle(canvas, radius, radius, radius*0.73, bright)
-	g.DrawCircle(canvas, radius, radius, radius*0.66, darker)
-	g.DrawCircle(canvas, radius, radius, radius*0.56, darkest)
-	
-	return canvas
-}
-
-func (g *Game) CreateBuddyEyes() *ebiten.Image {
-	canvas := ebiten.NewImage(int(g.buddyEyeWidth*2), int(g.buddyEyeHeight*2))
-	canvas.Clear()
-	
-	rad := g.buddyEyeWidth/2
-	
-	bright  := color.RGBA{R: 255, G: 233, B: 114, A: 255}
-	darker  := color.RGBA{R: 251, G: 116, B: 8,  A: 255}
-	
-	g.DrawCircle(canvas, rad, rad, rad, darker)
-	g.DrawCircle(canvas, rad, g.buddyEyeHeight-rad, rad, darker)
-	g.DrawRect(canvas, Rect{0, rad, g.buddyEyeWidth, g.buddyEyeHeight-rad*2}, darker)
-	
-	smallRad := (rad*2)/3
-	g.DrawCircle(canvas, rad, rad, smallRad, bright)
-	g.DrawCircle(canvas, rad, g.buddyEyeHeight-rad, smallRad, bright)
-	g.DrawRect(canvas, Rect{smallRad/2, rad, g.buddyEyeWidth-smallRad, g.buddyEyeHeight-rad*2}, bright)
-	
-	return canvas
-}
-
-func (g *Game) CreateBuddyEyesClosed() *ebiten.Image {
-	canvas := ebiten.NewImage(int(g.buddyEyeWidth*2), int(g.buddyEyeHeight*2))
-	canvas.Clear()
-	
-	rad := g.buddyEyeWidth/2
-	
-//	bright  := color.RGBA{R: 255, G: 233, B: 114, A: 255}
-	darker  := color.RGBA{R: 251, G: 116, B: 8,  A: 255}
-	darkest := color.RGBA{R: 63,  G: 14,  B: 0,  A: 255}
-	
-	g.DrawCircle(canvas, rad, g.buddyEyeHeight/2-rad/2, rad, darker)
-	smallRad := (rad*2)/3
-	g.DrawCircle(canvas, rad, g.buddyEyeHeight/2-rad/2, smallRad, darkest)
-	
-	g.DrawRect(canvas, Rect{0, 0, g.buddyEyeWidth, g.buddyEyeHeight/2-rad/2}, darkest)
-	
-	return canvas
-}
-
 func (g *Game) SetupAnim() {
-	rad := g.textHeight*4
-	
-	g.buddyBackground = g.CreateBuddyBackground(rad)
-	g.buddyEyes = g.CreateBuddyEyes()
-	g.buddyEyesClosed = g.CreateBuddyEyesClosed()
-	
-//	eyes := GetBackground()
-//	g.buddyEyes = g.ToCanvas(eyes, pixWidth)
-	
-//	eyesclosed := GetBackground()
-//	g.buddyEyesClosed = g.ToCanvas(eyesclosed, pixWidth)
+	g.MicLineCount = 24
+	for range(g.MicLineCount) {
+		g.micLines = append(g.micLines, MicLine{rand.Float32(), MicStatusListening})
+	}
 }
 
 func (g *Game) GetNewId() int {
