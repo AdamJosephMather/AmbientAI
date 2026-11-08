@@ -1,4 +1,4 @@
-package main
+package ui
 
 import (
 	"bytes"
@@ -494,8 +494,6 @@ func (g *Game) Update() error {
 		ebiten.SetCursorShape(ebiten.CursorShapeDefault)
 	}
 	
-	g.UpdateListening(rand.Float32(), MicStatusListening)
-	
 	return nil
 }
 
@@ -735,9 +733,7 @@ func (g *Game) DrawCircle(screen *ebiten.Image, x, y, r float32, c color.Color) 
 
 func (g *Game) SetupAnim() {
 	g.MicLineCount = 24
-	for range(g.MicLineCount) {
-		g.micLines = append(g.micLines, MicLine{rand.Float32(), MicStatusListening})
-	}
+	g.micLines = make([]MicLine, 0)
 }
 
 func (g *Game) GetNewId() int {
@@ -785,7 +781,7 @@ func (g *Game) ChooseRect() Rect {
 	return r
 }
 
-func main() {
+func runUI() {
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	ebiten.SetWindowSize(640, 480)
 	ebiten.SetWindowTitle("Ebitengine Rectangle and Text Example")
@@ -803,9 +799,6 @@ func main() {
 		return
 	}
 	game.SetupAnim()
-	
-	game.AddWindow("Test title", "Test body text goes here. This is a long bit of text.\n\nAnd more text", game.ChooseRect())
-	game.AddWindow("Second Test title", "More test text for the body goes here.\n\nLorem ipsum delor something", game.ChooseRect())
 	
 	if err := ebiten.RunGame(&game); err != nil {
 		log.Fatal(err)

@@ -3,19 +3,13 @@ package main
 import (
 	"AmbientAI/audio"
 	"AmbientAI/openrouter"
+	"AmbientAI/ui"
 	"AmbientAI/vad"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
-
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/canvas"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
 )
 
 var detector vad.Vad
@@ -25,13 +19,12 @@ var speech *openrouter.TTS
 var aiConfig *AIConfig
 var player *audio.Player
 
-var topLabel *widget.Label
-var windowDesktop *container.MultipleWindows
-
 var mainChat []openrouter.Message
 var mainChatForWorkers []string
 
 var speaker *speechController
+var game *ui.Game
+var curStatus ui.MicStatus
 
 type Status int
 
@@ -70,15 +63,15 @@ func appendMessageToWorker(message string, sender string) {
 func setListening(status Status) {
 	switch status {
 	case StatusSetup:
-		updateLabel("SETUP")
+		curStatus = ui.MicStatus404
 	case StatusListening:
-		updateLabel("LISTENING")
+		curStatus = ui.MicStatusListening
 		detector.Enable()
 	case StatusThinking:
-		updateLabel("THINKING")
+		curStatus = ui.MicStatusThinking
 		detector.Disable()
 	case StatusSpeaking:
-		updateLabel("SPEAKING")
+		curStatus = ui.MicStatusSpeaking
 		detector.Disable()
 	}
 }
@@ -290,9 +283,34 @@ func SetupVAD(vadConfig *VADConfig) error {
 		return err
 	}
 
-	//	detector.OnProbability = func(p float32) {
-	//		fmt.Printf("Speech probability: %.3f  %t\n", p, detector.IsSpeaking())
-	//	}
+//	detector.OnProbability = func(p float32) {
+//		game.UpdateListening(p, curStatus)
+//		fmt.Printf("Speech probability: %.3f  %t\n", p, detector.IsSpeaking())
+//	}
+	
+	maxVal := float32(0)
+	
+	detector.OnAudio = func(v float32) {
+		if v < 0 {
+			v = -v
+		}
+		
+		if v > maxVal {
+			maxVal = v
+		}else{
+			maxVal = maxVal*0.999
+		}
+		
+		diff := maxVal
+		if maxVal == 0 {
+			diff = 0.1
+		}
+		
+		changed := (v/diff+0.1)/1.1
+		
+		game.UpdateListening(changed, curStatus)
+	}
+	
 
 	detector.OnSpeech = func(audio []float32) {
 		setListening(StatusThinking)
@@ -310,68 +328,8 @@ func SetupVAD(vadConfig *VADConfig) error {
 	return nil
 }
 
-func updateLabel(text string) {
-	fyne.Do(func() {
-		topLabel.SetText(text)
-	})
-}
-
-func createWindow(title, body string) *container.InnerWindow {
-	text := widget.NewRichTextFromMarkdown(body)
-	text.Wrapping = fyne.TextWrapWord
-	return container.NewInnerWindow(title, container.NewVScroll(text))
-}
-
 func addWindow(title, body string) {
-	fyne.Do(func() {
-		placeWindow(windowDesktop, createWindow(title, body))
-	})
-}
-
-// Cascade new windows within the workspace so their title bars remain reachable.
-func placeWindow(desktop *container.MultipleWindows, window *container.InnerWindow) {
-	const margin float32 = 12
-	area := desktop.Size()
-	minimum := window.MinSize()
-	size := fyne.NewSize(
-		max(minimum.Width, min(440, area.Width-2*margin)),
-		max(minimum.Height, min(340, area.Height-2*margin)),
-	)
-	offset := float32(len(desktop.Windows)%8) * 28
-	window.Resize(size)
-	window.Move(fyne.NewPos(
-		margin+min(offset, max(0, area.Width-size.Width-2*margin)),
-		margin+min(offset, max(0, area.Height-size.Height-2*margin)),
-	))
-	window.CloseIntercept = func() {
-		for i, candidate := range desktop.Windows {
-			if candidate == window {
-				desktop.Windows = append(desktop.Windows[:i], desktop.Windows[i+1:]...)
-				desktop.Refresh()
-				return
-			}
-		}
-	}
-	desktop.Add(window)
-}
-
-func showApp() {
-	a := app.New()
-	w := a.NewWindow(aiConfig.AIName)
-
-	topLabel = widget.NewLabel("LISTENING")
-	topLabel.SizeName = theme.SizeNameHeadingText
-	topLabel.Alignment = fyne.TextAlignCenter
-
-	headerBg := canvas.NewRectangle(theme.Color(theme.ColorNameInputBackground))
-	headerBg.CornerRadius = 12
-	header := container.NewPadded(container.NewStack(headerBg, container.NewPadded(topLabel)))
-
-	windowDesktop = container.NewMultipleWindows()
-
-	w.SetContent(container.NewBorder(header, nil, nil, nil, windowDesktop))
-	w.Resize(fyne.NewSize(1000, 700))
-	w.ShowAndRun()
+	game.AddWindow(title, body, game.ChooseRect())
 }
 
 func handleTalking(talking bool) {
@@ -396,6 +354,12 @@ func main() {
 	chat = cht
 	speech = spch
 	aiConfig = aicn
+	
+	game, err = ui.SetupUI(aicn.AIName) // must come before VAD setup
+	if err != nil {
+		fmt.Println(err.Error())
+		return
+	}
 
 	err = SetupVAD(vadConfig)
 
@@ -463,13 +427,15 @@ Because your interactions are strictly designed to be low latency, you are not d
 		aiConfig.AIName, aiConfig.UserName,
 	)
 	appendMessage(sysPrompt, "system")
-
+	
 	// BEGIN
-
+	
+	curStatus = ui.MicStatusListening
 	detector.Enable()
+	
 	// don't call setListening yet, too soon UI doesn't exist yet
-
-	showApp()
+	
+	game.RunUI()
 
 	// done
 	if err := detector.StopListening(); err != nil {

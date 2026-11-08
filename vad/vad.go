@@ -32,6 +32,7 @@ type Vad struct {
 	speaking   atomic.Bool
 
 	OnProbability func(float32)
+	OnAudio       func(float32)
 	OnSpeech      func([]float32)
 	OnError       func(error)
 }
@@ -201,6 +202,10 @@ func (v *Vad) processFrames(
 				v.speaking.Store(false)
 				lastSequence = 0
 				lastGeneration = generation
+			}
+			
+			if v.OnAudio != nil {
+				v.OnAudio(frame.input.audio[0])
 			}
 
 			if !v.enabled.Load() {
