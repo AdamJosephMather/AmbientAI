@@ -795,9 +795,10 @@ func (g *Game) Draw(screen *ebiten.Image) {
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
-	g.width = outsideWidth
-	g.height = outsideHeight
-	return outsideWidth, outsideHeight
+	s := ebiten.Monitor().DeviceScaleFactor()
+	g.width = int(float64(outsideWidth) * s)
+	g.height = int(float64(outsideHeight) * s)
+	return g.width, g.height
 }
 
 func (g *Game) SetupTheme() {
