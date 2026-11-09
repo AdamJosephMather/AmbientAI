@@ -87,6 +87,7 @@ func setListening(status Status) {
 	}
 	
 	game.SetSleep(sleeping)
+	sleepctl.SetCanSleep(sleeping)
 }
 
 func sendWorkerMessage(message string) {
@@ -371,7 +372,7 @@ func SleepDone() {
 
 func main() {
 	println("Starting...")
-	sleep.SetCanSleep(false)
+	sleepctl.SetCanSleep(false)
 
 	vadConfig, trscribe, cht, spch, aicn, err := ReadConfig("config.toml")
 
