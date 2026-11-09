@@ -25,7 +25,8 @@ type inputAudio struct {
 }
 
 type transcriptionResponse struct {
-	Text string `json:"text"`
+	Text  string `json:"text"`
+	Usage Usage  `json:"usage"`
 }
 
 type TranscriptionConfig struct {
@@ -110,14 +111,14 @@ func EncodeWAV(samples []float32, sampleRate uint32) ([]byte, error) {
 func (t *Transcriber) Transcribe(
 	ctx context.Context,
 	samples []float32,
-) (string, error) {
+) (string, Usage, error) {
 	if len(samples) == 0 {
-		return "", errors.New("no audio samples")
+		return "", Usage{}, errors.New("no audio samples")
 	}
 
 	wav, err := EncodeWAV(samples, 16000)
 	if err != nil {
-		return "", fmt.Errorf("encode wav: %w", err)
+		return "", Usage{}, fmt.Errorf("encode wav: %w", err)
 	}
 
 	requestData := transcriptionRequest{
@@ -131,7 +132,7 @@ func (t *Transcriber) Transcribe(
 
 	body, err := json.Marshal(requestData)
 	if err != nil {
-		return "", fmt.Errorf("marshal transcription request: %w", err)
+		return "", Usage{}, fmt.Errorf("marshal transcription request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(
@@ -141,7 +142,7 @@ func (t *Transcriber) Transcribe(
 		bytes.NewReader(body),
 	)
 	if err != nil {
-		return "", err
+		return "", Usage{}, err
 	}
 
 	req.Header.Set("Authorization", "Bearer "+t.Config.APIKey)
@@ -149,17 +150,17 @@ func (t *Transcriber) Transcribe(
 
 	resp, err := t.Client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("transcription request: %w", err)
+		return "", Usage{}, fmt.Errorf("transcription request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "", Usage{}, err
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf(
+		return "", Usage{}, fmt.Errorf(
 			"transcription failed (%s): %s",
 			resp.Status,
 			string(responseBody),
@@ -169,8 +170,8 @@ func (t *Transcriber) Transcribe(
 	var result transcriptionResponse
 
 	if err := json.Unmarshal(responseBody, &result); err != nil {
-		return "", fmt.Errorf("decode transcription response: %w", err)
+		return "", Usage{}, fmt.Errorf("decode transcription response: %w", err)
 	}
 
-	return result.Text, nil
+	return result.Text, result.Usage, nil
 }

@@ -9,6 +9,8 @@ import (
 	"log"
 	"math/rand/v2"
 	"os"
+	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -161,6 +163,10 @@ type Game struct {
 	sleeping bool
 	SleepDone func()
 	sleepButton Button
+	
+	costMu sync.Mutex
+	workerCost float64
+	frontCost float64
 }
 
 type MicStatus int
@@ -186,6 +192,18 @@ func (g *Game) UpdateListening(val float32, status MicStatus) {
 		}
 		g.micLines[len(g.micLines)-1] = mcLine
 	}
+}
+
+func (g *Game) AddFrontEndCost(cost float64) {
+	g.costMu.Lock()
+	defer g.costMu.Unlock()
+	g.frontCost += cost
+}
+
+func (g *Game) AddWorkerCost(cost float64) {
+	g.costMu.Lock()
+	defer g.costMu.Unlock()
+	g.workerCost += cost
 }
 
 func CoordIn(x, y float32, rect Rect) bool {
@@ -731,6 +749,28 @@ func (g *Game) DrawWorkers(screen *ebiten.Image) {
 	
 	g.DrawBorder(screen, fullRect, g.stripSize, g.theme.borderColor)
 	g.DrawTextLine(screen, leftEdge+g.stripSize*2, g.stripSize, fullRect, workerText, g.theme.textColor)
+	
+	// Cost
+	
+	g.costMu.Lock()
+	costText := fmt.Sprintf("Workers: $%.3f\nFront End: $%.3f\nTotal: $%.3f", g.workerCost, g.frontCost, g.workerCost+g.frontCost)
+	g.costMu.Unlock()
+	width, height = text.Measure(costText, g.face, 0)
+	boxWidth = float32(width)+g.stripSize*3
+	boxHeight = float32(height)*3+g.stripSize*2 // measure only returns height for 1 line
+	leftEdge = float32(g.width) - boxWidth
+	
+	fullRect = Rect{
+		leftEdge,
+		fullRect.y+fullRect.h+g.stripSize,
+		boxWidth+2*g.stripSize,
+		boxHeight,
+	}
+	
+	g.DrawBorder(screen, fullRect, g.stripSize, g.theme.borderColor)
+	for i, line := range(strings.Split(costText, "\n")) {
+		g.DrawTextLine(screen, leftEdge+g.stripSize*2, g.stripSize*2+fullRect.y+float32(height)*float32(i), fullRect, line, g.theme.textColor)
+	}
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
@@ -894,7 +934,7 @@ func SetupUI(title string) (*Game, error) {
 	game.startheight    = 480
 	game.buttonToWindow = make(map[int]int)
 	game.SetupTheme()
-	err = game.SetupText(15)
+	err = game.SetupText(17)
 	if err != nil {
 		return nil, err
 	}

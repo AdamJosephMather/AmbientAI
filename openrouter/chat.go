@@ -69,6 +69,10 @@ type reasoningParam struct {
 	Exclude bool   `json:"exclude,omitempty"`
 }
 
+type usageParam struct {
+	Include bool `json:"include"`
+}
+
 type chatRequest struct {
 	ResponseFormat json.RawMessage `json:"response_format,omitempty"`
 	Model          string          `json:"model"`
@@ -79,6 +83,20 @@ type chatRequest struct {
 	Tools          []Tool          `json:"tools,omitempty"`
 	ToolChoice     json.RawMessage `json:"tool_choice,omitempty"`
 	Plugins        []WebPlugin     `json:"plugins,omitempty"`
+	Usage          *usageParam     `json:"usage,omitempty"`
+}
+
+type Usage struct {
+	Seconds          float64 `json:"seconds,omitempty"`
+	InputTokens      int     `json:"input_tokens,omitempty"`
+	OutputTokens     int     `json:"output_tokens,omitempty"`
+	PromptTokens     int     `json:"prompt_tokens"`
+	CompletionTokens int     `json:"completion_tokens"`
+	TotalTokens      int     `json:"total_tokens"`
+	Cost             float64 `json:"cost"` // USD credits charged
+	CostDetails      *struct {
+		UpstreamInferenceCost float64 `json:"upstream_inference_cost"`
+	} `json:"cost_details,omitempty"`
 }
 
 type chatResponse struct {
@@ -90,6 +108,7 @@ type chatResponse struct {
 		Message string `json:"message"`
 		Code    any    `json:"code"`
 	} `json:"error,omitempty"`
+	Usage *Usage `json:"usage,omitempty"`
 }
 
 type Chat struct {
@@ -110,20 +129,20 @@ func (c *Chat) ToolTokenBudget() int {
 
 // Complete returns only visible reply text. Call CompleteMessage when maintaining
 // a tool conversation so reasoning and tool calls can be saved in history.
-func (c *Chat) Complete(ctx context.Context, history []Message, model string, reasoning string) (string, error) {
-	message, err := c.CompleteMessage(ctx, history, model, reasoning, CompletionOptions{})
-	return message.Content, err
+func (c *Chat) Complete(ctx context.Context, history []Message, model string, reasoning string) (string, Usage, error) {
+	message, usage, err := c.CompleteMessage(ctx, history, model, reasoning, CompletionOptions{})
+	return message.Content, usage, err
 }
 
 // CompleteMessage returns the assistant message, including reasoning for replay.
 // Only Content should be displayed or passed to speech synthesis.
-func (c *Chat) CompleteMessage(ctx context.Context, history []Message, model string, reasoning string, options CompletionOptions) (Message, error) {
+func (c *Chat) CompleteMessage(ctx context.Context, history []Message, model string, reasoning string, options CompletionOptions) (Message, Usage, error) {
 	if len(history) == 0 {
-		return Message{}, errors.New("empty message history")
+		return Message{}, Usage{}, errors.New("empty message history")
 	}
 
 	if reasoning != "" && reasoning != "max" && reasoning != "xhigh" && reasoning != "high" && reasoning != "medium" && reasoning != "low" && reasoning != "minimal" && reasoning != "none" {
-		return Message{}, errors.New("reasoning level not valid: expected empty, max, xhigh, high, medium, low, minimal, or none")
+		return Message{}, Usage{}, errors.New("reasoning level not valid: expected empty, max, xhigh, high, medium, low, minimal, or none")
 	}
 
 	messages := make([]Message, 0, len(history)+1)
@@ -138,6 +157,7 @@ func (c *Chat) CompleteMessage(ctx context.Context, history []Message, model str
 		Tools:          options.Tools,
 		ToolChoice:     options.ToolChoice,
 		Plugins:        options.Plugins,
+		Usage:          &usageParam{Include: true},
 	}
 	if options.MaxTokens > 0 {
 		reqData.MaxTokens = options.MaxTokens
@@ -153,46 +173,52 @@ func (c *Chat) CompleteMessage(ctx context.Context, history []Message, model str
 
 	body, err := json.Marshal(reqData)
 	if err != nil {
-		return Message{}, fmt.Errorf("marshal chat request: %w", err)
+		return Message{}, Usage{}, fmt.Errorf("marshal chat request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Config.URL, bytes.NewReader(body))
 	if err != nil {
-		return Message{}, err
+		return Message{}, Usage{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Config.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.Client.Do(req)
 	if err != nil {
-		return Message{}, fmt.Errorf("chat request: %w", err)
+		return Message{}, Usage{}, fmt.Errorf("chat request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return Message{}, err
+		return Message{}, Usage{}, err
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Message{}, fmt.Errorf("chat failed (%s): %s", resp.Status, string(respBody))
+		return Message{}, Usage{}, fmt.Errorf("chat failed (%s): %s", resp.Status, string(respBody))
 	}
 
 	var result chatResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return Message{}, fmt.Errorf("decode chat response: %w", err)
+		return Message{}, Usage{}, fmt.Errorf("decode chat response: %w", err)
 	}
 
 	// OpenRouter can return HTTP 200 with an error body (e.g. upstream failure).
 	if result.Error != nil {
-		return Message{}, fmt.Errorf("chat error: %s (code %v)", result.Error.Message, result.Error.Code)
+		return Message{}, Usage{}, fmt.Errorf("chat error: %s (code %v)", result.Error.Message, result.Error.Code)
 	}
 	if len(result.Choices) == 0 {
-		return Message{}, errors.New("chat response had no choices")
+		return Message{}, Usage{}, errors.New("chat response had no choices")
 	}
 
 	if result.Choices[0].FinishReason == "length" {
-		return Message{}, fmt.Errorf("chat response exceeded output token limit (max_tokens=%d); increase the token budget rather than rephrasing the query", reqData.MaxTokens)
+		return Message{}, Usage{}, fmt.Errorf("chat response exceeded output token limit (max_tokens=%d); increase the token budget rather than rephrasing the query", reqData.MaxTokens)
 	}
-	return result.Choices[0].Message, nil
+	
+	var usage Usage
+	if result.Usage != nil {
+		usage = *result.Usage
+	}
+	
+	return result.Choices[0].Message, usage, nil
 }
