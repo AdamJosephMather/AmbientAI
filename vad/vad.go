@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/gen2brain/malgo"
+	"github.com/vcaesar/audio-go"
 )
 
 type audioFrame struct {
@@ -18,8 +18,8 @@ type Vad struct {
 	model Silero
 	state SileroState
 
-	ctx    *malgo.AllocatedContext
-	device *malgo.Device
+	ctx    *audiogo.AllocatedContext
+	device *audiogo.Device
 
 	frames chan audioFrame
 	stop   chan struct{}
@@ -76,17 +76,25 @@ func (v *Vad) BeginListening() error {
 	v.state.Reset()
 	v.dropped.Store(0)
 
-	ctx, err := malgo.InitContext(
+	ctx, err := audiogo.InitContext(
 		nil,
-		malgo.ContextConfig{},
+		audiogo.ContextConfig{},
 		nil,
 	)
 	if err != nil {
 		return err
 	}
 
-	config := malgo.DefaultDeviceConfig(malgo.Capture)
-	config.Capture.Format = malgo.FormatS16
+	// The pure-Go capture library can fall back to a silent null device.
+	// Treat unavailable hardware as an error instead of appearing to listen.
+	if ctx.Backend() == audiogo.BackendNull {
+		_ = ctx.Uninit()
+		ctx.Free()
+		return errors.New("no native microphone capture backend available")
+	}
+
+	config := audiogo.DefaultDeviceConfig(audiogo.Capture)
+	config.Capture.Format = audiogo.FormatS16
 	config.Capture.Channels = 1
 	config.SampleRate = 16000
 	config.PeriodSizeInFrames = 512
@@ -139,10 +147,10 @@ func (v *Vad) BeginListening() error {
 		}
 	}
 
-	device, err := malgo.InitDevice(
+	device, err := audiogo.InitDevice(
 		ctx.Context,
 		config,
-		malgo.DeviceCallbacks{
+		audiogo.DeviceCallbacks{
 			Data: onAudio,
 		},
 	)
