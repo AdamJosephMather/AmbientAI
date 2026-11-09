@@ -5,6 +5,7 @@ import (
 	"AmbientAI/openrouter"
 	"AmbientAI/ui"
 	"AmbientAI/vad"
+	"AmbientAI/sleep"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,8 @@ var speaker *speechController
 var game *ui.Game
 var curStatus ui.MicStatus
 
+var sleeping bool
+
 type Status int
 
 const (
@@ -33,6 +36,7 @@ const (
 	StatusListening               // 1
 	StatusThinking                // 2
 	StatusSpeaking                // 3
+	StatusSleeping                // 3
 )
 
 type WindowAdd struct {
@@ -44,6 +48,7 @@ type ModelResponse struct {
 	Speech    string      `json:"speech"`
 	WindowAdd []WindowAdd `json:"window_add"`
 	Invoke    bool        `json:"invoke_worker"`
+	Sleep     bool        `json:"sleep"`
 }
 
 func appendMessage(message string, role string) {
@@ -61,6 +66,8 @@ func appendMessageToWorker(message string, sender string) {
 }
 
 func setListening(status Status) {
+	sleeping = false
+	
 	switch status {
 	case StatusSetup:
 		curStatus = ui.MicStatus404
@@ -73,13 +80,19 @@ func setListening(status Status) {
 	case StatusSpeaking:
 		curStatus = ui.MicStatusSpeaking
 		detector.Disable()
+	case StatusSleeping:
+		curStatus = ui.MicStatusSleeping
+		detector.Disable()
+		sleeping = true
 	}
+	
+	game.SetSleep(sleeping)
 }
 
 func sendWorkerMessage(message string) {
 	appendMessage(fmt.Sprintf("[From: Worker]\n\n%s", message), "user")
 
-	if !detector.IsSpeaking() { // otherwise run on user speech end
+	if !detector.IsSpeaking() && !sleeping { // otherwise run on user speech end
 		runFrontResponse()
 	}
 }
@@ -151,6 +164,9 @@ func runToolCall(ctx context.Context, call openrouter.FunctionCall) (string, err
 }
 
 func startWorker(content string) {
+	game.WorkerStarted()
+	defer game.WorkerFinished()
+	
 	newChat := make([]openrouter.Message, 0)
 
 	var sysMessage openrouter.Message
@@ -256,24 +272,33 @@ func runFrontResponse() {
 	}
 
 	if mdlJson.Invoke {
-		//		fmt.Printf("Not yet implemented - workers")
-		//		appendMessage("[From: System]\n\nWorkers not yet implemented", "user")
 		fmt.Printf("Worker started. Messages in context %d", len(mainChatForWorkers))
 		result := strings.Join(mainChatForWorkers, "\n\n")
 		go startWorker(result)
 	}
+	
+	if mdlJson.Sleep {
+		setListening(StatusSleeping)
+	}
 }
 
 func handleAudio(audio *[]float32) {
+	if sleeping {
+		return
+	}
+	
+	setListening(StatusThinking)
+	
 	message, err := transcriber.Transcribe(context.Background(), *audio)
 
 	if err != nil {
 		message = "Transcription error: " + err.Error()
 		fmt.Println(message)
 	}
-
+	
 	appendMessage(fmt.Sprintf("[From: STT]\n\n%s", message), "user")
 	appendMessageToWorker(message, "user")
+	
 	runFrontResponse()
 }
 
@@ -310,10 +335,8 @@ func SetupVAD(vadConfig *VADConfig) error {
 		
 		game.UpdateListening(changed, curStatus)
 	}
-	
 
 	detector.OnSpeech = func(audio []float32) {
-		setListening(StatusThinking)
 		go handleAudio(&audio)
 	}
 
@@ -333,15 +356,22 @@ func addWindow(title, body string) {
 }
 
 func handleTalking(talking bool) {
-	if talking {
+	if sleeping {
+		setListening(StatusSleeping)
+	}else if talking {
 		setListening(StatusSpeaking)
 	} else {
 		setListening(StatusListening)
 	}
 }
 
+func SleepDone() {
+	setListening(StatusListening)
+}
+
 func main() {
 	println("Starting...")
+	sleep.SetCanSleep(false)
 
 	vadConfig, trscribe, cht, spch, aicn, err := ReadConfig("config.toml")
 
@@ -360,6 +390,7 @@ func main() {
 		fmt.Println(err.Error())
 		return
 	}
+	game.SleepDone = SleepDone
 
 	err = SetupVAD(vadConfig)
 
@@ -414,7 +445,8 @@ Your responses must contain only one valid JSON object, no Markdown fences nor r
 			"body":"A paragraph with **emphasis**.\n\n- First item\n- Second item"
 		}
 	],
-	"invoke_worker":false
+	"invoke_worker":false,
+	"sleep":false
 }
 
 # Windows
@@ -423,7 +455,11 @@ For a breakdown of information use one window per topic roughly. Each window bod
 
 # Workers
 
-Because your interactions are strictly designed to be low latency, you are not directly given access to any tools (web search, etc). Instead, you are given access to workers. When you invoke a worker it will be given the full history of the conversation up until the point you summoned it at, and it will determine what it needs to do. This can include longer thinking, research, etc. Then, when it has decided what you need to know, it will return with the information it believes you should know under the tag [From: Worker] (as opposed to [From: STT]). The user cannot see worker messages.`,
+Because your interactions are strictly designed to be low latency, you are not directly given access to any tools (web search, etc). Instead, you are given access to workers. When you invoke a worker it will be given the full history of the conversation up until the point you summoned it at, and it will determine what it needs to do. This can include longer thinking, research, etc. Then, when it has decided what you need to know, it will return with the information it believes you should know under the tag [From: Worker] (as opposed to [From: STT]). The user cannot see worker messages.
+
+# Sleep
+
+Disables microphone, sleeps. Wake by user onscreen.`,
 		aiConfig.AIName, aiConfig.UserName,
 	)
 	appendMessage(sysPrompt, "system")

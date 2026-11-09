@@ -43,7 +43,7 @@ type Graphic int
 const (
 	Graphic404       Graphic = iota // 0 (Go's default zero-value)
 	GraphicClose                    // 1
-	GraphicMic                      // 2
+	GraphicSleep                    // 2
 )
 
 type Interactable int
@@ -139,6 +139,7 @@ type Game struct {
 	textOffset float32
 	edgeWidth  float32
 	rectWidth float32
+	workersCount int
 	
 	theme Theme
 	
@@ -156,6 +157,10 @@ type Game struct {
 	
 	micLines []MicLine
 	MicLineCount int
+	
+	sleeping bool
+	SleepDone func()
+	sleepButton Button
 }
 
 type MicStatus int
@@ -164,6 +169,7 @@ const (
 	MicStatusListening
 	MicStatusThinking
 	MicStatusSpeaking
+	MicStatusSleeping
 )
 
 func (g *Game) UpdateListening(val float32, status MicStatus) {
@@ -257,10 +263,16 @@ func (g *Game) DragWindowEdgeBy(dX, dY float32, id int, edge Border) {
 }
 
 func (g *Game) DoButton(id int) {
+	if id == g.sleepButton.id && g.SleepDone != nil {
+		g.SleepDone()
+		return
+	}
+	
 	wId, exists := g.buttonToWindow[id]
 	
 	if exists {
 		g.CloseWindow(wId)
+		return
 	}
 	
 	// other button interactions here
@@ -483,6 +495,20 @@ func (g *Game) Update() error {
 		g.interaction = interactionInfo
 	}
 	
+	// position sleep button
+	
+	g.sleepButton.rect.x = float32(g.width)/2 - 5*g.textHeight
+	g.sleepButton.rect.y = float32(g.height)/2 - 3*g.textHeight
+	g.sleepButton.rect.w = 10*g.textHeight
+	g.sleepButton.rect.h = 6*g.textHeight
+	
+	if g.sleeping && CoordIn(mX, mY, g.sleepButton.rect) && doHoverCheck {
+		g.interaction.id = g.sleepButton.id
+		g.interaction.hitArea = g.sleepButton.rect
+		g.interaction.interactabletype = InteractableButton
+		g.interaction.interactiontype = InteractionHover
+	}
+	
 	if g.interaction.interactabletype == InteractableWindowEdge {
 		if g.interaction.border == BorderBottom || g.interaction.border == BorderTop {
 			ebiten.SetCursorShape(ebiten.CursorShapeNSResize)
@@ -557,8 +583,11 @@ func (g *Game) DrawGraphic(screen *ebiten.Image, r Rect, graphic Graphic) {
 	if graphic == GraphicClose {
 		vector.StrokeLine(screen, r.x, r.y, r.x+r.w, r.y+r.h, strokeWidth, g.theme.borderColor, true)
 		vector.StrokeLine(screen, r.x+r.w, r.y, r.x, r.y+r.h, strokeWidth, g.theme.borderColor, true)
-	}else if graphic == GraphicMic {
-		
+	}else if graphic == GraphicSleep {
+		w, h := text.Measure("Sleeping", g.face, 0)
+		x := r.x+r.w/2 - float32(w)/2
+		y := r.y+r.h/2 - float32(h)/2
+		g.DrawTextLine(screen, x, y, r, "Sleeping", g.theme.textColor)
 	}
 }
 
@@ -651,8 +680,7 @@ func (g *Game) DrawMicLines(screen *ebiten.Image) {
 		lineW*float32(len(g.micLines))*2+offset*2+g.stripSize*2,
 		lineH+2*offset+g.stripSize*2,
 	}
-	inset := fullRect
-	inset.Inset(g.stripSize)
+	
 	g.DrawBorder(screen, fullRect, g.stripSize, g.theme.borderColor)
 	
 	for i,val := range(g.micLines) {
@@ -669,14 +697,47 @@ func (g *Game) DrawMicLines(screen *ebiten.Image) {
 			g.DrawRect(screen, rect, g.theme.thinkingColor)
 		}else if (val.status == MicStatusSpeaking) {
 			g.DrawRect(screen, rect, g.theme.speakingColor)
+		}else if (val.status == MicStatusSleeping) {
+			g.DrawRect(screen, rect, g.theme.sleepingColor)
 		}
 	}
+}
+
+func (g *Game) WorkerStarted() {
+	g.workersCount += 1
+}
+
+func (g *Game) WorkerFinished() {
+	g.workersCount -= 1
+}
+
+func (g *Game) SetSleep(sleep bool) {
+	g.sleeping = sleep
+}
+
+func (g *Game) DrawWorkers(screen *ebiten.Image) {
+	workerText := fmt.Sprintf("Workers: %d", g.workersCount)
+	width, height := text.Measure(workerText, g.face, 0)
+	boxWidth := float32(width)+g.stripSize*3
+	boxHeight := float32(height)+g.stripSize*2
+	leftEdge := float32(g.width) - boxWidth
+	
+	fullRect := Rect{
+		leftEdge,
+		-2*g.stripSize,
+		boxWidth+2*g.stripSize,
+		boxHeight+2*g.stripSize,
+	}
+	
+	g.DrawBorder(screen, fullRect, g.stripSize, g.theme.borderColor)
+	g.DrawTextLine(screen, leftEdge+g.stripSize*2, g.stripSize, fullRect, workerText, g.theme.textColor)
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
 	fullRect := Rect{0, 0, float32(g.width), float32(g.height)}
 	g.DrawBackground(screen, fullRect, g.stripSize/2, g.rectWidth, g.theme.background, g.theme.backgroundLines)
 	g.DrawMicLines(screen)
+	g.DrawWorkers(screen)
 	
 	for i := range(g.windows) {
 		win := &g.windows[i]
@@ -686,6 +747,10 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		g.DrawTitleBar(screen, win)
 		g.DrawElements(screen, win)
 		g.DrawBorder(screen, win.rect, g.stripSize, g.theme.borderColor)
+	}
+	
+	if g.sleeping {
+		g.DrawButton(screen, g.sleepButton)
 	}
 }
 
@@ -808,6 +873,8 @@ func loadIcon(size int) ([]image.Image, error) {
 }
 
 func SetupUI(title string) (*Game, error) {
+	os.Setenv("EBITENGINE_GRAPHICS_LIBRARY", "opengl")
+	
 	icons, err := loadIcon(256)
 	if err != nil {
 		log.Printf("Failed loading icon: %s", err.Error())
@@ -832,6 +899,14 @@ func SetupUI(title string) (*Game, error) {
 		return nil, err
 	}
 	game.SetupAnim()
+	game.sleepButton = Button{
+		game.GetNewId(),
+		Rect{},
+		GraphicSleep,
+		game.theme.titleBackground,
+		game.theme.buttonHovering,
+		game.theme.buttonPressing,
+	}
 	
 	return &game, nil
 }
