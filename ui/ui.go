@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"bytes"
 	"fmt"
 	"image"
 	"image/color"
@@ -11,13 +10,11 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"unicode/utf8"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
-	"golang.org/x/image/font/gofont/goregular"
 )
 
 type Theme struct {
@@ -105,6 +102,10 @@ type Element struct {
 	yoffset float32
 	xoffset float32
 	text string
+	kind elementKind
+	style markdownStyle
+	w, h float32
+	ink elementInk
 }
 
 type Window struct {
@@ -119,6 +120,8 @@ type Window struct {
 	elements []Element
 	oldwidth float32
 	bodyheight float32
+	laidOutBody string
+	markdownFaces map[markdownStyle]*text.GoTextFace
 	
 	closeButton Button
 	
@@ -133,6 +136,7 @@ type MicLine struct {
 type Game struct {
 	faceSource *text.GoTextFaceSource
 	face       *text.GoTextFace
+	markdownSources [8]*text.GoTextFaceSource
 	
 	setup bool
 	lastId int
@@ -427,62 +431,9 @@ func (g *Game) Update() error {
 			interactionInfo.hitArea = win.closeButton.rect
 		}
 		
-		// calculate window text given window width if window width has changed
+		// Rebuild Markdown parts when content, width, or font settings change.
 		
-		if win.oldwidth == win.rect.w {
-			continue
-		}
-		
-		win.elements = make([]Element, 0)
-		
-		maxWidth := float64(win.rect.w - 4*g.stripSize)
-		lineStart := g.stripSize
-		
-		m := g.face.Metrics()
-		lineHeight := float32(m.HAscent + m.HDescent + m.HLineGap)
-		
-		curY := g.stripSize
-		curStart := 0
-		
-		// end: exclusive end of the line's text; next: where the next line begins
-		flush := func(end, next int) {
-			win.elements = append(win.elements, Element{curY, lineStart, win.body[curStart:end]})
-			curStart = next
-			curY += lineHeight
-		}
-		
-		for i, r := range win.body {
-			next := i + utf8.RuneLen(r)
-		
-			if r == '\n' {
-				flush(i, next) // exclude the newline itself
-				continue
-			}
-		
-			width, _ := text.Measure(win.body[curStart:next], g.face, 0) // includes current rune
-			if width > maxWidth {
-				if i == curStart {
-					flush(next, next) // single rune wider than the line; emit it anyway
-				} else {
-					flush(i, i) // current rune starts the next line
-				}
-			}
-		}
-		
-		if curStart < len(win.body) { // remaining text after the last wrap/newline
-			flush(len(win.body), len(win.body))
-		}
-		
-		if curStart < len(win.body) {
-			part := win.body[curStart:]
-			_, height := text.Measure(part, g.face, 0) 
-			el := Element{curY, lineStart, part}
-			win.elements = append(win.elements, el)
-			curY += float32(height)
-		}
-		
-		win.bodyheight = curY+g.stripSize
-		win.oldwidth = win.rect.w
+		g.layoutWindowMarkdown(win)
 	}
 	
 	// Scroll the text in a window
@@ -492,11 +443,11 @@ func (g *Game) Update() error {
 	if g.interaction.interactabletype == InteractableWindow && g.interaction.interactiontype == InteractionHover {
 		wIdx := g.FindWindow(g.interaction.id)
 		if wIdx != -1 {
-			g.windows[wIdx].scroll -= float32(yoff*3) * g.textHeight/g.windows[wIdx].bodyheight
-			if g.windows[wIdx].scroll < 0 {
-				g.windows[wIdx].scroll = 0
-			}else if g.windows[wIdx].scroll > 1 {
-				g.windows[wIdx].scroll = 1
+			w := &g.windows[wIdx]
+			if overflow := w.scrollOverflow(g.stripSize); overflow > 0 {
+				w.scroll = max(float32(0), min(float32(1), w.scroll-float32(yoff*3)*g.textHeight/overflow))
+			} else {
+				w.scroll = 0
 			}
 		}
 	}
@@ -639,17 +590,6 @@ func (g *Game) DrawButton(screen *ebiten.Image, button Button) {
 	smallerRect.Inset(1)
 	
 	g.DrawGraphic(screen, smallerRect, button.graphic)
-}
-
-func (g *Game) DrawElements(screen *ebiten.Image, w *Window) {
-	offsetX := w.rect.x+g.stripSize
-	offsetY := w.titleBarStrip + g.stripSize - w.scroll * w.bodyheight
-	
-	drawIn := Rect{w.rect.x, w.titleBarStrip + g.stripSize, w.rect.w, w.rect.h + w.rect.y - w.titleBarStrip - g.stripSize*2}
-	
-	for _, el := range(w.elements) {
-		g.DrawTextLine(screen, offsetX+el.xoffset, offsetY+el.yoffset, drawIn, el.text, g.theme.whiteColor)
-	}
 }
 
 func (g *Game) DrawTitleBar(screen *ebiten.Image, w *Window) {
@@ -817,14 +757,8 @@ func (g *Game) SetupTheme() {
 }
 
 func (g *Game) SetupText(size int) error {
-	s, err := text.NewGoTextFaceSource(bytes.NewReader(goregular.TTF))
-	if err != nil {
+	if err := g.setupMarkdownFonts(size); err != nil {
 		return err
-	}
-	g.faceSource = s
-	g.face = &text.GoTextFace{
-		Source: g.faceSource,
-		Size:   float64(size),
 	}
 	g.textHeight = float32(size)
 	g.textOffset = float32(int(g.textHeight/10))

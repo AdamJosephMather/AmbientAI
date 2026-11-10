@@ -32,3 +32,20 @@ $env:CGO_ENABLED = '0'
 $env:AMBIENT_TEST_MICROPHONE = '1'
 go test -count=1 -v ./vad -run TestMicrophoneCaptureLifecycle
 ```
+
+## Markdown window bodies
+
+Window bodies render CommonMark with GitHub-style tables, strikethrough, task
+lists, and automatic links. `ui/markdown.go` converts the parsed document into
+positioned text and rectangle elements for direct rendering. It supports all six
+heading levels, nested bold/italic, ordered and unordered lists, blockquotes,
+horizontal rules, inline code, fenced and indented code blocks, and hard breaks.
+
+Text wraps using the actual styled font metrics; table cells wrap independently
+and respect column alignment. Code preserves spacing and blank lines with
+four-column tab stops. Layout is cached until the body, window width, or font
+settings change, and scrolling stops at the content's bottom edge.
+
+Links are styled text (not clickable). Images show their alt text; remote images
+are not fetched. Raw HTML is displayed literally. Code blocks use monospace text
+and an optional language label, without syntax highlighting.
