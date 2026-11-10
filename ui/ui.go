@@ -268,16 +268,18 @@ func (g *Game) DragWindowEdgeBy(dX, dY float32, id int, edge Border) {
 		return
 	}
 	
-	if (edge == BorderBottom || edge == BorderBottomLeft ||  edge == BorderBottomRight) {
+	switch edge {
+	case BorderBottom, BorderBottomLeft, BorderBottomRight:
 		g.windows[i].rect.h += dY
-	}else if (edge == BorderTop || edge == BorderTopLeft ||  edge == BorderTopRight) {
+	case BorderTop, BorderTopLeft, BorderTopRight:
 		g.windows[i].rect.h -= dY
 		g.windows[i].rect.y += dY
 	}
-	if (edge == BorderLeft || edge == BorderTopLeft ||  edge == BorderBottomLeft) {
+	switch edge {
+	case BorderLeft, BorderTopLeft, BorderBottomLeft:
 		g.windows[i].rect.w -= dX
 		g.windows[i].rect.x += dX
-	}else if (edge == BorderRight || edge == BorderTopRight ||  edge == BorderBottomRight) {
+	case BorderRight, BorderTopRight, BorderBottomRight:
 		g.windows[i].rect.w += dX
 	}
 	
@@ -331,9 +333,10 @@ func (g *Game) Update() error {
 			id := g.interaction.id
 			iType := g.interaction.interactabletype
 			
-			if (iType == InteractableTitleBar || iType == InteractableWindow || iType == InteractableWindowEdge) {
+			switch iType {
+			case InteractableTitleBar, InteractableWindow, InteractableWindowEdge:
 				g.PullItUp(id)
-			}else if (iType == InteractableButton) {
+			case InteractableButton:
 				val, exists := g.buttonToWindow[id]
 				if exists {
 					g.PullItUp(val)
@@ -349,9 +352,10 @@ func (g *Game) Update() error {
 		g.interaction = InteractionInfo{}
 	}else if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
 		if g.interaction.interactiontype == InteractionPress {
-			if g.interaction.interactabletype == InteractableTitleBar {
+			switch g.interaction.interactabletype {
+			case InteractableTitleBar:
 				g.MoveWindowBy(dMX, dMY, g.interaction.id)
-			}else if g.interaction.interactabletype == InteractableWindowEdge {
+			case InteractableWindowEdge:
 				g.DragWindowEdgeBy(dMX, dMY, g.interaction.id, g.interaction.border)
 			}
 		}
@@ -477,13 +481,14 @@ func (g *Game) Update() error {
 	}
 	
 	if g.interaction.interactabletype == InteractableWindowEdge {
-		if g.interaction.border == BorderBottom || g.interaction.border == BorderTop {
+		switch g.interaction.border {
+		case BorderBottom, BorderTop:
 			ebiten.SetCursorShape(ebiten.CursorShapeNSResize)
-		}else if g.interaction.border == BorderLeft || g.interaction.border == BorderRight {
+		case BorderLeft, BorderRight:
 			ebiten.SetCursorShape(ebiten.CursorShapeEWResize)
-		}else if g.interaction.border == BorderTopLeft || g.interaction.border == BorderBottomRight {
+		case BorderTopLeft, BorderBottomRight:
 			ebiten.SetCursorShape(ebiten.CursorShapeNWSEResize)
-		}else if g.interaction.border == BorderTopRight || g.interaction.border == BorderBottomLeft {
+		case BorderTopRight, BorderBottomLeft:
 			ebiten.SetCursorShape(ebiten.CursorShapeNESWResize)
 		}
 	}else{
@@ -547,10 +552,11 @@ func (g *Game) DrawGraphic(screen *ebiten.Image, r Rect, graphic Graphic) {
 	r.Inset(g.stripSize)
 	
 	strokeWidth := r.w/8
-	if graphic == GraphicClose {
+	switch graphic {
+	case GraphicClose:
 		vector.StrokeLine(screen, r.x, r.y, r.x+r.w, r.y+r.h, strokeWidth, g.theme.borderColor, true)
 		vector.StrokeLine(screen, r.x+r.w, r.y, r.x, r.y+r.h, strokeWidth, g.theme.borderColor, true)
-	}else if graphic == GraphicSleep {
+	case GraphicSleep:
 		w, h := text.Measure("Sleeping", g.face, 0)
 		x := r.x+r.w/2 - float32(w)/2
 		y := r.y+r.h/2 - float32(h)/2
@@ -647,13 +653,14 @@ func (g *Game) DrawMicLines(screen *ebiten.Image) {
 			val.val*lineH,
 		}
 		
-		if (val.status == MicStatusListening) {
+		switch val.status {
+		case MicStatusListening:
 			g.DrawRect(screen, rect, g.theme.listeningColor)
-		}else if (val.status == MicStatusThinking) {
+		case MicStatusThinking:
 			g.DrawRect(screen, rect, g.theme.thinkingColor)
-		}else if (val.status == MicStatusSpeaking) {
+		case MicStatusSpeaking:
 			g.DrawRect(screen, rect, g.theme.speakingColor)
-		}else if (val.status == MicStatusSleeping) {
+		case MicStatusSleeping:
 			g.DrawRect(screen, rect, g.theme.sleepingColor)
 		}
 	}
@@ -822,7 +829,7 @@ func (g *Game) ChooseRect() Rect {
 	return r
 }
 
-func loadIcon(size int) ([]image.Image, error) {
+func loadIcon() ([]image.Image, error) {
 	out := make([]image.Image, 0)
 	
 	for _,size := range([]string{"16x16", "32x32", "64x64", "128x128", "256x256"}) {
@@ -848,7 +855,7 @@ func loadIcon(size int) ([]image.Image, error) {
 func SetupUI(title string) (*Game, error) {
 	os.Setenv("EBITENGINE_GRAPHICS_LIBRARY", "opengl")
 	
-	icons, err := loadIcon(256)
+	icons, err := loadIcon()
 	if err != nil {
 		log.Printf("Failed loading icon: %s", err.Error())
 	}else{
