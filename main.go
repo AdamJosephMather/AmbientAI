@@ -459,7 +459,7 @@ When no response or tool is justified, return exactly:
 Speech and tools are independent: a justified tool call can still use speech:null when a spoken announcement would add nothing. When you do speak, keep it brief and useful.
 
 # Output Format
-Your responses must contain only one valid JSON object, no Markdown fences nor regular text around the JSON. Escape line breaks inside strings as \n, tabs as \t, double quotes as \" and backslashes as \\. Never put literal line breaks inside a quoted string. Formatting whitespace outside strings is allowed. Use these fields (speech is a string or null; window_add is an array; invoke_worker is a boolean):
+Your responses must contain only one valid JSON object, no Markdown fences nor regular text around the JSON. Escape line breaks inside strings as \n, tabs as \t, double quotes as \" and backslashes as \\. Never put literal line breaks inside a quoted string. Formatting whitespace outside strings is allowed. Use these fields (speech is a string or null):
 
 {
 	"speech":"Text to say aloud to the user",
