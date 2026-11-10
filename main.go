@@ -279,8 +279,8 @@ func runFrontResponse() {
 		case SleepTool:
 			doSleep = true
 		default:
-			text := fmt.Sprintf("[From: system]\n\nUnknown tool type")
-			fmt.Printf(text)
+			text := "[From: system]\n\nUnknown tool type"
+			fmt.Println(text)
 			appendMessage(text, "user")
 		}
 	}
