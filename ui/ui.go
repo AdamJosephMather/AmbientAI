@@ -292,8 +292,6 @@ func (g *Game) DoButton(id int) {
 		g.CloseWindow(wId)
 		return
 	}
-	
-	// other button interactions here
 }
 
 func (g *Game) Update() error {

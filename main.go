@@ -39,18 +39,6 @@ const (
 	StatusSleeping                // 3
 )
 
-type WindowAdd struct {
-	Title string `json:"title"`
-	Body  string `json:"body"`
-}
-
-type ModelResponse struct {
-	Speech    string      `json:"speech"`
-	WindowAdd []WindowAdd `json:"window_add"`
-	Invoke    bool        `json:"invoke_worker"`
-	Sleep     bool        `json:"sleep"`
-}
-
 func appendMessage(message string, role string) {
 	var newMessage openrouter.Message
 
@@ -253,15 +241,16 @@ func runFrontResponse() {
 		setListening(StatusListening)
 		return
 	}
-
+	
 	mdlJson, err := parseModelResponse(aiMsg.Content)
-
+	
 	if err != nil {
 		fmt.Printf("Error parsing JSON: %v\n", err)
 		setListening(StatusListening)
 		return
 	}
-	// Keep only valid JSON in history so malformed output is not imitated.
+	
+	// get clean json to put back
 	canonical, _ := json.Marshal(mdlJson)
 	aiMsg.Content = string(canonical)
 	mainChat = append(mainChat, aiMsg)
@@ -276,18 +265,27 @@ func runFrontResponse() {
 		// A deliberate silent response has no playback completion callback.
 		setListening(StatusListening)
 	}
-
-	for _, wndw := range mdlJson.WindowAdd {
-		addWindow(wndw.Title, wndw.Body)
-	}
-
-	if mdlJson.Invoke {
-		fmt.Printf("Worker started. Messages in context %d", len(mainChatForWorkers))
-		result := strings.Join(mainChatForWorkers, "\n\n")
-		go startWorker(result)
+	
+	doSleep := false
+	
+	for _, wrapper := range mdlJson.Tools {
+		switch tool := wrapper.Value.(type) {
+		case AddWindowTool:
+			addWindow(tool.Title, tool.Body)
+		case InvokeWorkerTool:
+			fmt.Printf("Worker started. Messages in context %d", len(mainChatForWorkers))
+			result := strings.Join(mainChatForWorkers, "\n\n")
+			go startWorker(result)
+		case SleepTool:
+			doSleep = true
+		default:
+			text := fmt.Sprintf("[From: system]\n\nUnknown tool type")
+			fmt.Printf(text)
+			appendMessage(text, "user")
+		}
 	}
 	
-	if mdlJson.Sleep {
+	if doSleep {
 		setListening(StatusSleeping)
 	}
 }
@@ -455,25 +453,29 @@ When it is unclear whether overheard speech is meant for you, prefer silence. As
 
 Never fill silence with "Standing by", "I'm here", "Take your time", "Let me know", or similar availability announcements. Do not announce that you are choosing to stay silent. Do not open windows or invoke workers merely to acknowledge speech.
 
-When no response or action is justified, return exactly:
-{"speech":null,"window_add":[],"invoke_worker":false}
+When no response or tool is justified, return exactly:
+{"speech":null, "tools":[]}
 
-Speech and actions are independent: a justified window or worker action can use speech:null when a spoken announcement would add nothing. When you do speak, keep it brief and useful.
+Speech and tools are independent: a justified tool call can still use speech:null when a spoken announcement would add nothing. When you do speak, keep it brief and useful.
 
 # Output Format
 Your responses must contain only one valid JSON object, no Markdown fences nor regular text around the JSON. Escape line breaks inside strings as \n, tabs as \t, double quotes as \" and backslashes as \\. Never put literal line breaks inside a quoted string. Formatting whitespace outside strings is allowed. Use these fields (speech is a string or null; window_add is an array; invoke_worker is a boolean):
 
 {
 	"speech":"Text to say aloud to the user",
-	"window_add":[
-		{
-			"title":"window title",
-			"body":"A paragraph with **emphasis**.\n\n- First item\n- Second item"
-		}
-	],
-	"invoke_worker":false,
-	"sleep":false
+	"tools":[
+		{valid tool json objects},
+	]
 }
+
+# Tools
+
+{"tool":"add_window", "title":"window title", "body":"A paragraph with **emphasis**.\n\n- First item\n- Second item"}
+- Creates a new window in the assistant's UI.
+{"tool":"invoke_worker"}
+- Starts a background worker with access to conversation data up until the call point in the conversation.
+{"tool":"sleep"}
+- Disables the microphone, wake with user interaction in UI.
 
 # Windows
 
@@ -481,11 +483,7 @@ For a breakdown of information use one window per topic roughly. Each window bod
 
 # Workers
 
-Because your interactions are strictly designed to be low latency, you are not directly given access to any tools (web search, etc). Instead, you are given access to workers. When you invoke a worker it will be given the full history of the conversation up until the point you summoned it at, and it will determine what it needs to do. This can include longer thinking, research, etc. Then, when it has decided what you need to know, it will return with the information it believes you should know under the tag [From: Worker] (as opposed to [From: STT]). The user cannot see worker messages.
-
-# Sleep
-
-Disables microphone, sleeps. Wake by user onscreen.`,
+Because your interactions are strictly designed to be low latency, you are not directly given access to any tools (web search, etc). Instead, you are given access to workers. When you invoke a worker it will be given the full history of the conversation up until the point you summoned it at, and it will determine what it needs to do. This can include longer thinking, research, etc. Then, when it has decided what you need to know, it will return with the information it believes you should know under the tag [From: Worker] (as opposed to [From: STT]). The user cannot see worker messages.`,
 		aiConfig.AIName, aiConfig.UserName,
 	)
 	appendMessage(sysPrompt, "system")
