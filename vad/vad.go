@@ -10,8 +10,9 @@ import (
 )
 
 type audioFrame struct {
-	input SileroInput
-	seq   uint64
+	input      SileroInput
+	seq        uint64
+	generation uint64
 }
 
 type Vad struct {
@@ -34,17 +35,21 @@ type Vad struct {
 	OnProbability func(float32)
 	OnAudio       func(float32)
 	OnSpeech      func([]float32)
+	OnSpeechStart func()
 	OnError       func(error)
 }
 
 func (v *Vad) Enable() {
-	v.enabled.Store(true)
-	v.generation.Add(1)
+	if v.enabled.CompareAndSwap(false, true) {
+		v.generation.Add(1)
+	}
 }
 
 func (v *Vad) Disable() {
-	v.enabled.Store(false)
-	v.generation.Add(1)
+	if v.enabled.Swap(false) {
+		v.generation.Add(1)
+	}
+	v.speaking.Store(false)
 }
 
 func (v *Vad) IsEnabled() bool {
@@ -130,8 +135,9 @@ func (v *Vad) BeginListening() error {
 				sequence++
 
 				frame := audioFrame{
-					input: partial,
-					seq:   sequence,
+					input:      partial,
+					seq:        sequence,
+					generation: v.generation.Load(),
 				}
 
 				select {
@@ -202,6 +208,10 @@ func (v *Vad) processFrames(
 
 		case frame := <-frames:
 			generation := v.generation.Load()
+			// Never interpret queued audio from playback or a previous session.
+			if frame.generation != generation {
+				continue
+			}
 
 			// New session, or enable/disable transition.
 			if generation != lastGeneration {
@@ -211,7 +221,7 @@ func (v *Vad) processFrames(
 				lastSequence = 0
 				lastGeneration = generation
 			}
-			
+
 			if v.OnAudio != nil {
 				v.OnAudio(frame.input.audio[0])
 			}
@@ -258,20 +268,25 @@ func (v *Vad) processFrames(
 				v.OnProbability(probability)
 			}
 
-			audio := segmenter.Push(
-				&frame.input,
-				probability,
-			)
-			
-			v.speaking.Store(segmenter.speaking)
-			
-			if audio != nil &&
-				v.enabled.Load() &&
-				generation == v.generation.Load() &&
-				v.OnSpeech != nil {
-				v.OnSpeech(audio)
-			}
+			v.processSpeechFrame(&segmenter, &frame.input, probability, generation)
 		}
+	}
+}
+
+// Keep speech-start notification synchronous so inference is cancelled before
+// the utterance finishes and its transcription is queued.
+func (v *Vad) processSpeechFrame(segmenter *speechSegmenter, frame *SileroInput, probability float32, generation uint64) {
+	if !v.enabled.Load() || generation != v.generation.Load() {
+		return
+	}
+	wasSpeaking := segmenter.speaking
+	audio := segmenter.Push(frame, probability)
+	v.speaking.Store(segmenter.speaking)
+	if !wasSpeaking && segmenter.speaking && v.OnSpeechStart != nil {
+		v.OnSpeechStart()
+	}
+	if audio != nil && v.enabled.Load() && generation == v.generation.Load() && v.OnSpeech != nil {
+		v.OnSpeech(audio)
 	}
 }
 

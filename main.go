@@ -3,14 +3,15 @@ package main
 import (
 	"AmbientAI/audio"
 	"AmbientAI/openrouter"
+	"AmbientAI/sleep"
 	"AmbientAI/ui"
 	"AmbientAI/vad"
-	"AmbientAI/sleep"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 var detector vad.Vad
@@ -27,7 +28,13 @@ var speaker *speechController
 var game *ui.Game
 var curStatus ui.MicStatus
 
+// conversationMu owns history, turn state, and all listening transitions.
+var conversationMu sync.Mutex
 var sleeping bool
+var frontTurns responseGate
+var transcriptionQueue [][]float32
+var transcribing bool
+var workerPending bool
 
 type Status int
 
@@ -55,7 +62,7 @@ func appendMessageToWorker(message string, sender string) {
 
 func setListening(status Status) {
 	sleeping = false
-	
+
 	switch status {
 	case StatusSetup:
 		curStatus = ui.MicStatus404
@@ -64,7 +71,7 @@ func setListening(status Status) {
 		detector.Enable()
 	case StatusThinking:
 		curStatus = ui.MicStatusThinking
-		detector.Disable()
+		detector.Enable()
 	case StatusSpeaking:
 		curStatus = ui.MicStatusSpeaking
 		detector.Disable()
@@ -73,15 +80,17 @@ func setListening(status Status) {
 		detector.Disable()
 		sleeping = true
 	}
-	
+
 	game.SetSleep(sleeping)
 	sleepctl.SetCanSleep(sleeping)
 }
 
 func sendWorkerMessage(message string) {
+	conversationMu.Lock()
+	defer conversationMu.Unlock()
 	appendMessage(fmt.Sprintf("[From: Worker]\n\n%s", message), "user")
-
-	if !detector.IsSpeaking() && !sleeping { // otherwise run on user speech end
+	workerPending = true
+	if !detector.IsSpeaking() && !sleeping && !transcribing && !speaker.snapshot().Active {
 		runFrontResponse()
 	}
 }
@@ -124,10 +133,10 @@ func runToolCall(ctx context.Context, call openrouter.FunctionCall) (string, err
 			Plugins:   []openrouter.WebPlugin{{ID: "web", MaxResults: 5}},
 			MaxTokens: chat.ToolTokenBudget(),
 		})
-		
+
 		fmt.Printf("Worker Cost Added: %f\n", usage.Cost)
 		game.AddWorkerCost(usage.Cost)
-		
+
 		if err != nil {
 			return "", err
 		}
@@ -159,7 +168,7 @@ func runToolCall(ctx context.Context, call openrouter.FunctionCall) (string, err
 func startWorker(content string) {
 	game.WorkerStarted()
 	defer game.WorkerFinished()
-	
+
 	newChat := make([]openrouter.Message, 0)
 
 	var sysMessage openrouter.Message
@@ -226,30 +235,50 @@ Below is the chat between the user and the assistant:`,
 	}
 }
 
+// Called with conversationMu held. Network work runs outside the lock.
 func runFrontResponse() {
+	if sleeping || transcribing || detector.IsSpeaking() {
+		return
+	}
+	ctx := frontTurns.begin()
+	history := append([]openrouter.Message(nil), mainChat...)
+	workerPending = false
 	setListening(StatusThinking)
+	go completeFrontResponse(ctx, history)
+}
 
-	aiMsg, usage, err := chat.CompleteMessage(context.Background(), mainChat, aiConfig.ModelFast, aiConfig.ModelFastReasoning, openrouter.CompletionOptions{
+func completeFrontResponse(ctx context.Context, history []openrouter.Message) {
+	aiMsg, usage, err := chat.CompleteMessage(ctx, history, aiConfig.ModelFast, aiConfig.ModelFastReasoning, openrouter.CompletionOptions{
 		ResponseFormat: json.RawMessage(`{"type":"json_object"}`),
 	})
-	
-	fmt.Printf("Front End Cost Added: %f\n", usage.Cost)
+
+	conversationMu.Lock()
+	defer conversationMu.Unlock()
+	// A cancelled or superseded response must never speak, mutate history,
+	// execute tools, or reopen the microphone during another turn.
 	game.AddFrontEndCost(usage.Cost)
+	if !frontTurns.finish(ctx) {
+		return
+	}
+	if sleeping || detector.IsSpeaking() || transcribing {
+		return
+	}
+	fmt.Printf("Front End Cost Added: %f\n", usage.Cost)
 
 	if err != nil {
 		fmt.Printf("Front-end request failed: %v\n", err)
 		setListening(StatusListening)
 		return
 	}
-	
+
 	mdlJson, err := parseModelResponse(aiMsg.Content)
-	
+
 	if err != nil {
 		fmt.Printf("Error parsing JSON: %v\n", err)
 		setListening(StatusListening)
 		return
 	}
-	
+
 	// get clean json to put back
 	canonical, _ := json.Marshal(mdlJson)
 	aiMsg.Content = string(canonical)
@@ -265,9 +294,9 @@ func runFrontResponse() {
 		// A deliberate silent response has no playback completion callback.
 		setListening(StatusListening)
 	}
-	
+
 	doSleep := false
-	
+
 	for _, wrapper := range mdlJson.Tools {
 		switch tool := wrapper.Value.(type) {
 		case AddWindowTool:
@@ -284,31 +313,65 @@ func runFrontResponse() {
 			appendMessage(text, "user")
 		}
 	}
-	
+
 	if doSleep {
 		setListening(StatusSleeping)
 	}
 }
 
-func handleAudio(audio *[]float32) {
-	if sleeping {
+func handleSpeechStart() {
+	conversationMu.Lock()
+	defer conversationMu.Unlock()
+	if sleeping || !detector.IsEnabled() || speaker.snapshot().Active {
 		return
 	}
-	
-	setListening(StatusThinking)
-	
-	message, usage, err := transcriber.Transcribe(context.Background(), *audio)
-	game.AddFrontEndCost(usage.Cost)
+	frontTurns.cancel()
+	setListening(StatusListening)
+}
 
-	if err != nil {
-		message = "Transcription error: " + err.Error()
-		fmt.Println(message)
+func handleAudio(audio []float32) {
+	conversationMu.Lock()
+	defer conversationMu.Unlock()
+	if sleeping || !detector.IsEnabled() {
+		return
 	}
-	
-	appendMessage(fmt.Sprintf("[From: STT]\n\n%s", message), "user")
-	appendMessageToWorker(message, "user")
-	
-	runFrontResponse()
+	frontTurns.cancel()
+	transcriptionQueue = append(transcriptionQueue, audio)
+	if !transcribing {
+		transcribing = true
+		setListening(StatusThinking)
+		go drainTranscriptions()
+	}
+}
+
+// Preserve utterance order and retain earlier fragments when the user resumes
+// speaking. Only the front-end inference is cancelled, never captured speech.
+func drainTranscriptions() {
+	for {
+		conversationMu.Lock()
+		if len(transcriptionQueue) == 0 {
+			transcribing = false
+			if !sleeping && !detector.IsSpeaking() {
+				runFrontResponse()
+			}
+			conversationMu.Unlock()
+			return
+		}
+		samples := transcriptionQueue[0]
+		transcriptionQueue = transcriptionQueue[1:]
+		conversationMu.Unlock()
+
+		message, usage, err := transcriber.Transcribe(context.Background(), samples)
+		conversationMu.Lock()
+		game.AddFrontEndCost(usage.Cost)
+		if err != nil {
+			fmt.Printf("Transcription error: %v\n", err)
+		} else {
+			appendMessage(fmt.Sprintf("[From: STT]\n\n%s", message), "user")
+			appendMessageToWorker(message, "user")
+		}
+		conversationMu.Unlock()
+	}
 }
 
 func SetupVAD(vadConfig *VADConfig) error {
@@ -317,37 +380,39 @@ func SetupVAD(vadConfig *VADConfig) error {
 		return err
 	}
 
-//	detector.OnProbability = func(p float32) {
-//		game.UpdateListening(p, curStatus)
-//		fmt.Printf("Speech probability: %.3f  %t\n", p, detector.IsSpeaking())
-//	}
-	
+	//	detector.OnProbability = func(p float32) {
+	//		game.UpdateListening(p, curStatus)
+	//		fmt.Printf("Speech probability: %.3f  %t\n", p, detector.IsSpeaking())
+	//	}
+
 	maxVal := float32(0)
-	
+
 	detector.OnAudio = func(v float32) {
 		if v < 0 {
 			v = -v
 		}
-		
+
 		if v > maxVal {
 			maxVal = v
-		}else{
-			maxVal = maxVal*0.999
+		} else {
+			maxVal = maxVal * 0.999
 		}
-		
+
 		diff := maxVal
 		if maxVal == 0 {
 			diff = 0.1
 		}
-		
-		changed := (v/diff+0.1)/1.1
-		
-		game.UpdateListening(changed, curStatus)
+
+		changed := (v/diff + 0.1) / 1.1
+
+		conversationMu.Lock()
+		status := curStatus
+		conversationMu.Unlock()
+		game.UpdateListening(changed, status)
 	}
 
-	detector.OnSpeech = func(audio []float32) {
-		go handleAudio(&audio)
-	}
+	detector.OnSpeechStart = handleSpeechStart
+	detector.OnSpeech = handleAudio
 
 	detector.OnError = func(err error) {
 		fmt.Println("VAD error:", err.Error())
@@ -364,18 +429,30 @@ func addWindow(title, body string) {
 	game.AddWindow(title, body, game.ChooseRect())
 }
 
-func handleTalking(talking bool) {
+func handleTalking(_ bool) {
+	conversationMu.Lock()
+	defer conversationMu.Unlock()
 	if sleeping {
 		setListening(StatusSleeping)
-	}else if talking {
+	} else if speaker.snapshot().Active {
 		setListening(StatusSpeaking)
+	} else if workerPending && !transcribing && !detector.IsSpeaking() {
+		runFrontResponse()
+	} else if frontTurns.active() || transcribing {
+		setListening(StatusThinking)
 	} else {
 		setListening(StatusListening)
 	}
 }
 
 func SleepDone() {
-	setListening(StatusListening)
+	conversationMu.Lock()
+	defer conversationMu.Unlock()
+	if speaker.snapshot().Active {
+		setListening(StatusSpeaking)
+	} else {
+		setListening(StatusListening)
+	}
 }
 
 func main() {
@@ -393,7 +470,7 @@ func main() {
 	chat = cht
 	speech = spch
 	aiConfig = aicn
-	
+
 	game, err = ui.SetupUI(aicn.AIName) // must come before VAD setup
 	if err != nil {
 		fmt.Println(err.Error())
@@ -431,9 +508,9 @@ func main() {
 			}(audio.GenerationID)
 			return audio, nil
 		},
-		play:       player.PlayPCM,
-		talking:    func(active bool) { handleTalking(active) },
-		onError:    func(err error) { fmt.Printf("Could not speak response: %s\n", err) },
+		play:    player.PlayPCM,
+		talking: func(active bool) { go handleTalking(active) },
+		onError: func(err error) { fmt.Printf("Could not speak response: %s\n", err) },
 	}
 
 	sysPrompt := fmt.Sprintf(
@@ -487,14 +564,16 @@ Because your interactions are strictly designed to be low latency, you are not d
 		aiConfig.AIName, aiConfig.UserName,
 	)
 	appendMessage(sysPrompt, "system")
-	
+
 	// BEGIN
-	
+
+	conversationMu.Lock()
 	curStatus = ui.MicStatusListening
 	detector.Enable()
-	
+	conversationMu.Unlock()
+
 	// don't call setListening yet, too soon UI doesn't exist yet
-	
+
 	game.RunUI()
 
 	// done

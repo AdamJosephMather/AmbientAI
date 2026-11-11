@@ -1,5 +1,30 @@
 # Ambient
 
+## Conversation turns
+
+Speech detection stays enabled during transcription and front-end inference.
+When the user resumes speaking, the in-flight front-end request is cancelled
+immediately at speech onset. Captured utterances are transcribed in order, and
+the next request includes those earlier fragments. Cancelled and superseded
+replies cannot enter history, run tools, or queue speech. Worker updates wait
+during user speech, transcription, and assistant playback.
+
+Detection is disabled after a spoken reply is accepted, through synthesis and
+playback, then enabled again. Sleep also disables detection until UI wakeup.
+Capture frames from an earlier detection session are discarded to prevent
+playback audio being interpreted as user speech after the microphone reopens.
+
+To check whether repeated words originate in the configured TTS provider rather
+than playback, run the optional live probe. It synthesizes three short examples
+and transcribes the raw PCM without playing it. This uses the TTS and
+transcription credentials in `config.toml` and incurs their API charges:
+
+```powershell
+$env:AMBIENT_TEST_TTS = '1'
+go test -count=1 -v . -run TestProviderSpeechProbe
+Remove-Item Env:AMBIENT_TEST_TTS
+```
+
 ## Building without CGO
 
 On Windows PowerShell:
