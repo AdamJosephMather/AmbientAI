@@ -1,12 +1,77 @@
 package main
 
 import (
+	"AmbientAI/audio"
 	"AmbientAI/openrouter"
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
+
+func playStreamedResponse(ctx context.Context, text string, tts *openrouter.TTS, play func(context.Context, io.Reader) error, usage func(string)) error {
+	generated, err := tts.OpenSpeechStream(ctx, text)
+	if err != nil {
+		return err
+	}
+	defer generated.Body.Close()
+	// Close before waiting for the player's reader to detach. Otherwise a
+	// stalled HTTP read could prevent interruption from completing.
+	stop := context.AfterFunc(ctx, func() { generated.Body.Close() })
+	defer stop()
+	if usage != nil {
+		defer usage(generated.GenerationID)
+	}
+	pcm, err := audio.PCMReader(generated.Body, generated.ContentType, audio.OutputSampleRate)
+	if err == nil {
+		err = play(ctx, pcm)
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
+}
+
+// Stream whole replies, splitting only when the endpoint's input limit requires
+// it. Short sentences retain the context and prosody of the complete reply.
+func streamingSpeechChunks(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	if utf8.RuneCountInString(text) <= 5000 {
+		return []string{text}
+	}
+	var chunks []string
+	for _, sentence := range speechChunks(text) {
+		if len(chunks) > 0 && utf8.RuneCountInString(chunks[len(chunks)-1])+1+utf8.RuneCountInString(sentence) <= 5000 {
+			chunks[len(chunks)-1] += " " + sentence
+		} else {
+			chunks = append(chunks, sentence)
+		}
+	}
+	return chunks
+}
+
+func speakStreamingResponse(ctx context.Context, text string, stream func(context.Context, string) error, started, finished func(string)) error {
+	for _, chunk := range streamingSpeechChunks(text) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if started != nil {
+			started(chunk)
+		}
+		if err := stream(ctx, chunk); err != nil {
+			return fmt.Errorf("stream speech: %w", err)
+		}
+		if finished != nil {
+			finished(chunk)
+		}
+	}
+	return ctx.Err()
+}
 
 // Synthesize the next sentence while the current one plays. The unbuffered
 // handoff bounds prefetch to one sentence and preserves playback order.

@@ -23,6 +23,7 @@ type TTSConfig struct {
 	URL            string `toml:"url"`
 	Voice          string `toml:"voice"`
 	ResponseFormat string `toml:"response_format"` // "mp3" or "pcm"
+	Mode           string `toml:"mode"`            // "auto", "stream", or "sentences"
 }
 
 type ttsRequest struct {
@@ -36,6 +37,28 @@ type Speech struct {
 	Audio        []byte
 	ContentType  string // "audio/mpeg" or "audio/pcm"
 	GenerationID string
+}
+
+// SpeechStream owns the HTTP response. Close it on completion or cancellation.
+type SpeechStream struct {
+	Body         io.ReadCloser
+	ContentType  string
+	GenerationID string
+}
+
+// StreamingEnabled uses a conservative model capability list. Explicit modes
+// let compatible providers be added without changing application code.
+func (c TTSConfig) StreamingEnabled() (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
+	case "", "auto":
+		return strings.HasPrefix(strings.ToLower(c.Model), "speechify/"), nil
+	case "stream":
+		return true, nil
+	case "sentences":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid TTS mode %q: use auto, stream, or sentences", c.Mode)
+	}
 }
 
 type TTS struct {
@@ -57,6 +80,24 @@ func (t *TTS) Synthesize(ctx context.Context, text string) (*Speech, Usage, erro
 // SynthesizeAudio returns audio immediately, allowing usage to be fetched in
 // the background with SpeechUsage without delaying playback.
 func (t *TTS) SynthesizeAudio(ctx context.Context, text string) (*Speech, error) {
+	stream, err := t.OpenSpeechStream(ctx, text)
+	if err != nil {
+		return nil, err
+	}
+	defer stream.Body.Close()
+	data, err := io.ReadAll(stream.Body)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, errors.New("tts returned empty audio")
+	}
+	return &Speech{Audio: data, ContentType: stream.ContentType, GenerationID: stream.GenerationID}, nil
+}
+
+// OpenSpeechStream returns after response headers, without buffering the clip.
+// The endpoint already returns audio bytes; do not request JSON/SSE streaming.
+func (t *TTS) OpenSpeechStream(ctx context.Context, text string) (*SpeechStream, error) {
 	if utf8.RuneCountInString(text) > 5000 {
 		return nil, errors.New("text exceeds 5000 character limit; split it into smaller segments")
 	}
@@ -86,30 +127,36 @@ func (t *TTS) SynthesizeAudio(ctx context.Context, text string) (*Speech, error)
 	if err != nil {
 		return nil, fmt.Errorf("tts request: %w", err)
 	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxAudioBytes+1))
-	if err != nil {
-		return nil, err
-	}
-
 	// Non-2xx responses are JSON error bodies, not audio.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer resp.Body.Close()
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("tts failed (%s): %s", resp.Status, string(data))
 	}
-	if len(data) > maxAudioBytes {
-		return nil, errors.New("audio exceeds size limit")
-	}
-	if len(data) == 0 {
-		return nil, errors.New("tts returned empty audio")
-	}
-
-	speech := &Speech{
-		Audio:        data,
+	speech := &SpeechStream{
+		Body:         &limitedAudioBody{ReadCloser: resp.Body, remaining: maxAudioBytes},
 		ContentType:  resp.Header.Get("Content-Type"),
 		GenerationID: resp.Header.Get("X-Generation-Id"),
 	}
 	return speech, nil
+}
+
+type limitedAudioBody struct {
+	io.ReadCloser
+	remaining int64
+}
+
+func (r *limitedAudioBody) Read(p []byte) (int, error) {
+	if int64(len(p)) > r.remaining+1 {
+		p = p[:r.remaining+1]
+	}
+	n, err := r.ReadCloser.Read(p)
+	if int64(n) > r.remaining {
+		n = int(r.remaining)
+		err = errors.New("audio exceeds size limit")
+	}
+	r.remaining -= int64(n)
+	return n, err
 }
 
 // SpeechUsage retries records that have not yet become visible. The timeout

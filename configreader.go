@@ -1,12 +1,12 @@
 package main
 
 import (
+	"AmbientAI/openrouter"
 	"errors"
 	"fmt"
+	"github.com/BurntSushi/toml"
 	"net/http"
 	"time"
-	"github.com/BurntSushi/toml"
-	"AmbientAI/openrouter"
 )
 
 type VADConfig struct {
@@ -14,21 +14,21 @@ type VADConfig struct {
 }
 
 type AIConfig struct {
-	AIName string `toml:"ai_name"`
+	AIName   string `toml:"ai_name"`
 	UserName string `toml:"user_name"`
-	
-	ModelFast string `toml:"model_fast"`
-	ModelFastReasoning string `toml:"model_fast_reasoning"`
-	ModelSmart string `toml:"model_smart"`
+
+	ModelFast           string `toml:"model_fast"`
+	ModelFastReasoning  string `toml:"model_fast_reasoning"`
+	ModelSmart          string `toml:"model_smart"`
 	ModelSmartReasoning string `toml:"model_smart_reasoning"`
 }
 
 type Config struct {
-	Transcription  openrouter.TranscriptionConfig `toml:"transcription"`
-	Chat           openrouter.ChatConfig          `toml:"chat"`
-	TTS            openrouter.TTSConfig           `toml:"tts"`
-	Vad            VADConfig                      `toml:"vad"`
-	AI             AIConfig                       `toml:"ai"`
+	Transcription openrouter.TranscriptionConfig `toml:"transcription"`
+	Chat          openrouter.ChatConfig          `toml:"chat"`
+	TTS           openrouter.TTSConfig           `toml:"tts"`
+	Vad           VADConfig                      `toml:"vad"`
+	AI            AIConfig                       `toml:"ai"`
 }
 
 func ReadConfig(configPath string) (*VADConfig, *openrouter.Transcriber, *openrouter.Chat, *openrouter.TTS, *AIConfig, error) {
@@ -41,15 +41,18 @@ func ReadConfig(configPath string) (*VADConfig, *openrouter.Transcriber, *openro
 	if config.Transcription.APIKey == "" {
 		return nil, nil, nil, nil, nil, errors.New("transcription API key is empty")
 	}
-	
+
 	if config.Chat.APIKey == "" {
 		return nil, nil, nil, nil, nil, errors.New("chat API key is empty")
 	}
-	
+
 	if config.TTS.APIKey == "" {
 		return nil, nil, nil, nil, nil, errors.New("tts API key is empty")
 	}
-	
+	if _, err := config.TTS.StreamingEnabled(); err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+
 	if config.Vad.Path == "" {
 		return nil, nil, nil, nil, nil, errors.New("VAD Model Path is empty")
 	}
@@ -79,4 +82,3 @@ func ReadConfig(configPath string) (*VADConfig, *openrouter.Transcriber, *openro
 		},
 	}, &config.AI, nil
 }
-

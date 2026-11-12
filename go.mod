@@ -6,6 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/ebitengine/oto/v3 v3.5.1
 	github.com/hajimehoshi/ebiten/v2 v2.10.6
+	github.com/hajimehoshi/go-mp3 v0.3.4
 	github.com/vcaesar/audio-go v0.10.0
 	github.com/yuin/goldmark v1.7.16
 	golang.org/x/image v0.45.0

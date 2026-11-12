@@ -1,5 +1,56 @@
 # Ambient
 
+## TTS audio formats
+
+Playback reads the audio format from each TTS response instead of assuming a
+particular provider's sample rate. Raw `audio/pcm` responses must describe their
+sample rate and channel count in `Content-Type`, for example
+`audio/pcm;rate=24000;channels=1`. Raw samples must be signed 16-bit little-endian
+PCM, with one or two channels. Missing or unsupported formats produce an error
+instead of playing at the wrong speed.
+
+MP3 and WAV responses are decoded using their embedded format information.
+All supported responses are converted to 48 kHz stereo PCM for the output
+device, preserving duration and pitch. Changing providers does not require
+changing playback code. In `config.toml`, select a model, a voice belonging to
+that model, and a `response_format` it supports (`pcm` or `mp3` on OpenRouter).
+Some providers only support one of those request formats.
+
+### Streaming and sentence mode
+
+Set `mode` in `[tts]`:
+
+- `"auto"` (the default) streams full responses for `speechify/` models and uses
+  sentence generation for other models. This is a conservative model-name
+  capability rule, not a claim that other models cannot stream.
+- `"stream"` enables full-response streaming for any compatible model/voice.
+- `"sentences"` explicitly keeps sentence-by-sentence generation and prefetch.
+
+The current Speechify config uses `mode = "auto"`. Streaming sends the entire
+reply to the same OpenRouter speech endpoint in one request and decodes PCM or
+MP3 as bytes arrive. It does not wait for the complete clip before playback.
+Only responses exceeding the endpoint's existing 5,000-character limit are
+split into multiple requests. The voice still needs to belong to the selected
+model; streaming transport is selected by model and config, not by voice name.
+The chosen mode is printed at startup.
+
+One player owns the stream through playback completion. Interruptions close
+the HTTP body, stopping blocked reads as well as playback. Usage lookup runs
+in the background, including for interrupted streams. A failed or partially
+played stream reports an error; it is never automatically retried as sentences,
+which could replay words the user already heard.
+
+An optional live probe measures time to first decoded audio and completion for
+PCM and MP3 without playing through the speakers. It uses the configured TTS
+credentials and incurs API charges; the selected provider must support both
+formats for this probe:
+
+```powershell
+$env:AMBIENT_TEST_TTS_STREAM = '1'
+go test -count=1 -v . -run '^TestLiveTTSStreaming$'
+Remove-Item Env:AMBIENT_TEST_TTS_STREAM
+```
+
 ## Conversation turns
 
 Speech detection stays enabled during transcription and front-end inference.

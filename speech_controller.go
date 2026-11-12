@@ -29,6 +29,7 @@ type speechController struct {
 	completed   []string
 	interrupted string
 	synthesize  func(context.Context, string) (*openrouter.Speech, error)
+	stream      func(context.Context, string) error
 	play        func(context.Context, []byte) error
 	talking     func(bool)
 	onError     func(error)
@@ -82,15 +83,19 @@ func (s *speechController) run() {
 		ctx, cancel := context.WithCancel(context.Background())
 		s.cancel = cancel
 		s.remaining = speechChunks(text)
+		if s.stream != nil {
+			s.remaining = streamingSpeechChunks(text)
+		}
 		s.mu.Unlock()
 
-		err := speakResponseWithProgress(ctx, text, s.synthesize, s.play, func(sentence string) {
+		started := func(sentence string) {
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			if ctx.Err() == nil {
 				s.current = sentence
 			}
-		}, func(sentence string) {
+		}
+		finished := func(sentence string) {
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			if ctx.Err() == nil {
@@ -101,7 +106,13 @@ func (s *speechController) run() {
 				s.current = ""
 				s.remaining = s.remaining[1:]
 			}
-		})
+		}
+		var err error
+		if s.stream != nil {
+			err = speakStreamingResponse(ctx, text, s.stream, started, finished)
+		} else {
+			err = speakResponseWithProgress(ctx, text, s.synthesize, s.play, started, finished)
+		}
 		cancel()
 		s.mu.Lock()
 		s.cancel = nil

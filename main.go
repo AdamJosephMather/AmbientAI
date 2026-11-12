@@ -285,6 +285,7 @@ func completeFrontResponse(ctx context.Context, history []openrouter.Message) {
 	mainChat = append(mainChat, aiMsg)
 
 	if strings.TrimSpace(mdlJson.Speech) != "" {
+		println(mdlJson.Speech)
 		appendMessageToWorker(mdlJson.Speech, aiConfig.AIName)
 		setListening(StatusSpeaking)
 		speaker.submit("", mdlJson.Speech)
@@ -485,32 +486,54 @@ func main() {
 		return
 	}
 
-	plyr, err := audio.NewPlayer(audio.HeyGenSampleRate, audio.HeyGenChannels)
+	plyr, err := audio.NewPlayer(audio.OutputSampleRate, audio.OutputChannels)
 	if err != nil {
 		fmt.Printf("Could not initialize audio: %s\n", err.Error())
 		return
 	}
 	player = plyr
+	recordSpeechUsage := func(id string) {
+		if id == "" {
+			return
+		}
+		go func() {
+			usage, err := speech.SpeechUsage(context.Background(), id)
+			if err != nil {
+				fmt.Printf("Could not retrieve speech usage: %v\n", err)
+				return
+			}
+			game.AddFrontEndCost(usage.Cost)
+		}()
+	}
 	speaker = &speechController{
 		synthesize: func(ctx context.Context, text string) (*openrouter.Speech, error) {
-			audio, err := speech.SynthesizeAudio(ctx, text)
+			generated, err := speech.SynthesizeAudio(ctx, text)
 			if err != nil {
 				return nil, err
 			}
 			// A completed synthesis is billable even if playback is interrupted.
-			go func(id string) {
-				usage, err := speech.SpeechUsage(context.Background(), id)
-				if err != nil {
-					fmt.Printf("Could not retrieve speech usage: %v\n", err)
-					return
-				}
-				game.AddFrontEndCost(usage.Cost)
-			}(audio.GenerationID)
-			return audio, nil
+			recordSpeechUsage(generated.GenerationID)
+			pcm, err := audio.DecodePCM(generated.Audio, generated.ContentType, audio.OutputSampleRate)
+			if err != nil {
+				return nil, err
+			}
+			return &openrouter.Speech{
+				Audio: pcm, ContentType: "audio/pcm;rate=48000;channels=2",
+				GenerationID: generated.GenerationID,
+			}, nil
 		},
 		play:    player.PlayPCM,
 		talking: func(active bool) { go handleTalking(active) },
 		onError: func(err error) { fmt.Printf("Could not speak response: %s\n", err) },
+	}
+	streaming, _ := speech.Config.StreamingEnabled() // Validated by ReadConfig.
+	if streaming {
+		fmt.Printf("TTS mode: streaming (%s)\n", speech.Config.Model)
+		speaker.stream = func(ctx context.Context, text string) error {
+			return playStreamedResponse(ctx, text, speech, player.PlayReader, recordSpeechUsage)
+		}
+	} else {
+		fmt.Printf("TTS mode: sentences (%s)\n", speech.Config.Model)
 	}
 
 	sysPrompt := fmt.Sprintf(

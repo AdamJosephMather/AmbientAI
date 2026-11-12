@@ -14,9 +14,19 @@ tool_max_tokens = 16384
 
 [tts]
 api_key = "sk-or-v1-"
-model = "heygen/heygen-voice-1-turbo"
 url = "https://openrouter.ai/api/v1/audio/speech"
-voice = "nadine"
+
+# For mode, "stream" or "sentence"
+# "auto" also exists, but only works for speechify models
+
+model = "speechify/simba-3.5"
+voice = "beth"
+mode = "auto"
+
+# model = "heygen/heygen-voice-1-turbo"
+# voice = "nadine"
+# mode = "stream"
+
 response_format = "pcm"
 
 [vad]
@@ -26,7 +36,7 @@ path = "vad/silero_vad.bin"
 ai_name = "Zoe"
 user_name = "boss"
 
-model_fast = "~deepseek/deepseek-flash-latest:nitro"
+model_fast = "~deepseek/deepseek-flash-latest:latency"
 model_fast_reasoning = "none"
 
 model_smart = "~deepseek/deepseek-flash-latest"

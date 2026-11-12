@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	HeyGenSampleRate = 44100
-	HeyGenChannels   = 1
+	OutputSampleRate = 48000
+	OutputChannels   = 2
 )
 
 // Match the device buffer with a silent tail so returning from PlayPCM means
@@ -62,17 +62,23 @@ func NewPlayer(sampleRate, channels int) (*Player, error) {
 // PlayPCM plays raw 16-bit little-endian PCM once, including draining the
 // device's final speech samples, or stops promptly when ctx is cancelled.
 func (p *Player) PlayPCM(ctx context.Context, pcm []byte) error {
+	// Keep whole interleaved frames, including for multi-channel output.
+	pcm = pcm[:len(pcm)-len(pcm)%p.frameBytes]
+	if len(pcm) == 0 {
+		return ctx.Err()
+	}
+	return p.PlayReader(ctx, bytes.NewReader(pcm))
+}
+
+// PlayReader plays incremental PCM through one device player. The caller must
+// unblock source on cancellation (for HTTP audio, close the response body).
+func (p *Player) PlayReader(ctx context.Context, pcm io.Reader) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// Keep whole interleaved frames, including for multi-channel output.
-	pcm = pcm[:len(pcm)-len(pcm)%p.frameBytes]
-	if len(pcm) == 0 {
-		return nil
-	}
-	source := io.MultiReader(bytes.NewReader(pcm), bytes.NewReader(make([]byte, p.drainBytes)))
+	source := io.MultiReader(pcm, bytes.NewReader(make([]byte, p.drainBytes)))
 	player := p.newPlayer(source)
 	// Oto's Close is a no-op. Explicitly detach this source on every exit.
 	defer player.PauseAndStopReading()
