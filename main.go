@@ -53,6 +53,10 @@ func appendMessage(message string, role string) {
 	newMessage.Role = role
 
 	mainChat = append(mainChat, newMessage)
+	
+	if role == "user" {
+		println(message)
+	}
 }
 
 func appendMessageToWorker(message string, sender string) {
@@ -301,7 +305,13 @@ func completeFrontResponse(ctx context.Context, history []openrouter.Message) {
 	for _, wrapper := range mdlJson.Tools {
 		switch tool := wrapper.Value.(type) {
 		case AddWindowTool:
-			addWindow(tool.Title, tool.Body)
+			addWindow(tool.Title, tool.Body, tool.X, tool.Y, tool.W, tool.H)
+		case DelWindowTool:
+			delWindow(tool.ID)
+		case HighlightWindowTool:
+			highlightWindow(tool.ID)
+		case ResizeWindowTool:
+			resizeWindow(tool.ID, tool.X, tool.Y, tool.W, tool.H)
 		case InvokeWorkerTool:
 			fmt.Printf("Worker started. Messages in context %d", len(mainChatForWorkers))
 			result := strings.Join(mainChatForWorkers, "\n\n")
@@ -426,8 +436,63 @@ func SetupVAD(vadConfig *VADConfig) error {
 	return nil
 }
 
-func addWindow(title, body string) {
-	game.AddWindow(title, body, game.ChooseRect())
+func addWindow(title, body string, x, y, w, h *int) {
+	var rect ui.Rect
+	
+	if w == nil || h == nil || x == nil || y == nil {
+		rect = game.ChooseRect()
+	}else{
+		rect = ui.Rect{
+			X: float32(*x),
+			Y: float32(*y),
+			W: float32(*w),
+			H: float32(*h),
+		}
+	}
+	
+	id := game.AddWindow(title, body, rect)
+	appendMessage(fmt.Sprintf("[From: system]\n\nWindow created, ID: %d", id), "user")
+}
+
+func resizeWindow(id, x, y, w, h int) {
+	var rect ui.Rect
+	
+	rect = ui.Rect{
+		X: float32(x),
+		Y: float32(y),
+		W: float32(w),
+		H: float32(h),
+	}
+	
+	suceeded := game.MoveWindowTo(id, rect)
+	
+	if suceeded {
+		appendMessage(fmt.Sprintf("[From: system]\n\nWindow move successfully, ID: %d", id), "user")
+	}else {
+		appendMessage(fmt.Sprintf("[From: system]\n\nCould not find window ID: %d", id), "user")
+	}
+	
+	highlightWindow(id)
+}
+
+func delWindow(id int) {
+	suceeded := game.CloseWindow(id)
+	
+	if suceeded {
+		appendMessage(fmt.Sprintf("[From: system]\n\nWindow closed successfully, ID: %d", id), "user")
+	}else {
+		appendMessage(fmt.Sprintf("[From: system]\n\nCould not find window ID: %d", id), "user")
+	}
+}
+
+func highlightWindow(id int) {
+	suceeded := game.PullItUp(id)
+	
+	if suceeded {
+		appendMessage(fmt.Sprintf("[From: system]\n\nWindow highlighted successfully, ID: %d", id), "user")
+	}else {
+		appendMessage(fmt.Sprintf("[From: system]\n\nCould not find window ID: %d", id), "user")
+	}
 }
 
 func handleTalking(_ bool) {
@@ -456,6 +521,34 @@ func SleepDone() {
 	}
 }
 
+func windowPosToString(win ui.WindowSimple) string {
+	return fmt.Sprintf("UI: %d X: %d Y: %d W: %d H: %d", win.ID, int(win.Rect.X), int(win.Rect.Y), int(win.Rect.W), int(win.Rect.H))
+}
+
+func UISizeChange(width, height int, newWindows []ui.WindowSimple) {
+	windowInfo := make([]string, max(len(newWindows)+1, 2))
+	
+	windowInfo[0] = fmt.Sprintf("[From: system]\n\nAssistant UI workspace resized. New size: %dx%d. Updated windows:", width, height)
+	
+	for i,win := range(newWindows) {
+		windowInfo[i+1] = windowPosToString(win)
+	}
+	
+	if len(newWindows) == 0 {
+		windowInfo[1] = "No open windows."
+	}
+	
+	appendMessage(strings.Join(windowInfo, "\n"), "user")
+}
+
+func UserClosedWindow(id int) {
+	appendMessage(fmt.Sprintf("[From: system]\n\nUser closed window, ID: %d", id), "user")
+}
+
+func UserResizedWindow(win ui.WindowSimple) {
+	appendMessage(fmt.Sprintf("[From: system]\n\nUser changed window:\n%s", windowPosToString(win)), "user")
+}
+
 func main() {
 	println("Starting...")
 	sleepctl.SetCanSleep(false)
@@ -478,6 +571,9 @@ func main() {
 		return
 	}
 	game.SleepDone = SleepDone
+	game.UISizeChange = UISizeChange
+	game.UserClosedWindow = UserClosedWindow
+	game.UserResizedWindow = UserResizedWindow
 
 	err = SetupVAD(vadConfig)
 
@@ -570,8 +666,14 @@ Your responses must contain only one valid JSON object, no Markdown fences nor r
 
 # Tools
 
-{"tool":"add_window", "title":"window title", "body":"A paragraph with **emphasis**.\n\n- First item\n- Second item"}
-- Creates a new window in the assistant's UI.
+{"tool":"add_window", "title":"Window Title", "body":"A paragraph with **emphasis**.\n\n- First item\n- Second item", x:240, y:120, w:400, h:400}
+- Creates a new window in the assistant's UI. x,y,w,h can be ommited and the window will be placed in the center of the screen.
+{"tool":"del_window", "id":42}
+- Closes the window given by the ID returned by add_window
+{"tool":"highlight_window", "id":42}
+- Brings window with ID to the front
+{"tool":"resize_window", "id":42, x:240, y:120, w:400, h:400}
+- Moves/resizes window 'id' to new location and size and brings the window to front
 {"tool":"invoke_worker"}
 - Starts a background worker with access to conversation data up until the call point in the conversation.
 {"tool":"sleep"}

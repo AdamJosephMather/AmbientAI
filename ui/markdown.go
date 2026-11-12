@@ -485,30 +485,30 @@ func (l *markdownLayout) table(table *extast.Table, x, y, width float32) float32
 }
 
 func (g *Game) layoutWindowMarkdown(w *Window) {
-	if w.oldwidth == w.rect.w && w.laidOutBody == w.body && w.markdownFaces != nil {
+	if w.oldwidth == w.rect.W && w.laidOutBody == w.body && w.markdownFaces != nil {
 		return
 	}
 	source := []byte(strings.ReplaceAll(strings.ReplaceAll(w.body, "\r\n", "\n"), "\r", "\n"))
 	doc := markdownParser.Parser().Parse(gmtext.NewReader(source))
 	m := g.face.Metrics()
 	l := markdownLayout{game: g, source: source, faces: make(map[markdownStyle]*text.GoTextFace), lineHeight: float32(m.HAscent + m.HDescent + m.HLineGap), gap: g.textHeight * 0.45, padding: max(float32(2), g.stripSize)}
-	y := l.blocks(doc, g.stripSize, g.stripSize, max(float32(1), w.rect.w-4*g.stripSize))
+	y := l.blocks(doc, g.stripSize, g.stripSize, max(float32(1), w.rect.W-4*g.stripSize))
 	w.elements = l.elements
 	w.markdownFaces = l.faces
 	w.bodyheight = y + g.stripSize
-	w.oldwidth = w.rect.w
+	w.oldwidth = w.rect.W
 	w.laidOutBody = w.body
 }
 
 func (w *Window) scrollOverflow(padding float32) float32 {
-	visible := max(float32(0), w.rect.y+w.rect.h-w.titleBarStrip-2*padding)
+	visible := max(float32(0), w.rect.Y+w.rect.H-w.titleBarStrip-2*padding)
 	return max(float32(0), w.bodyheight-visible)
 }
 
 func (g *Game) DrawElements(screen *ebiten.Image, w *Window) {
-	offsetX := w.rect.x + g.stripSize
+	offsetX := w.rect.X + g.stripSize
 	offsetY := w.titleBarStrip + g.stripSize - w.scroll*w.scrollOverflow(g.stripSize)
-	clip := image.Rect(int(w.rect.x+g.stripSize), int(w.titleBarStrip+g.stripSize), int(w.rect.x+w.rect.w-g.stripSize), int(w.rect.y+w.rect.h-g.stripSize)).Intersect(screen.Bounds())
+	clip := image.Rect(int(w.rect.X+g.stripSize), int(w.titleBarStrip+g.stripSize), int(w.rect.X+w.rect.W-g.stripSize), int(w.rect.Y+w.rect.H-g.stripSize)).Intersect(screen.Bounds())
 	if clip.Empty() {
 		return
 	}

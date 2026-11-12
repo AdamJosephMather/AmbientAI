@@ -62,7 +62,7 @@ const (
 )
 
 type Rect struct {
-	x, y, w, h float32
+	X, Y, W, H float32
 }
 
 type Border int
@@ -128,6 +128,15 @@ type Window struct {
 	scroll float32
 }
 
+type WindowSimple struct {
+	ID int
+	
+	Title string
+	Body string
+	
+	Rect Rect
+}
+
 type MicLine struct {
 	val float32
 	status MicStatus
@@ -166,6 +175,9 @@ type Game struct {
 	
 	sleeping bool
 	SleepDone func()
+	UISizeChange func(width int, height int, newWindows []WindowSimple)
+	UserResizedWindow func(newWin WindowSimple)
+	UserClosedWindow func(id int)
 	sleepButton Button
 	
 	costMu sync.Mutex
@@ -211,10 +223,10 @@ func (g *Game) AddWorkerCost(cost float64) {
 }
 
 func CoordIn(x, y float32, rect Rect) bool {
-	return x >= rect.x && y >= rect.y && x <= rect.x+rect.w && y <= rect.y+rect.h;
+	return x >= rect.X && y >= rect.Y && x <= rect.X+rect.W && y <= rect.Y+rect.H;
 }
 
-func (g *Game) PullItUp(id int) {
+func (g *Game) PullItUp(id int) bool {
 	swapping := false
 	
 	for i, w := range(g.windows) {
@@ -224,6 +236,8 @@ func (g *Game) PullItUp(id int) {
 			g.windows[i-1], g.windows[i] = g.windows[i], g.windows[i-1] // I love python
 		}
 	}
+	
+	return swapping
 }
 
 func (g *Game) FindWindow(id int) int {
@@ -235,29 +249,44 @@ func (g *Game) FindWindow(id int) int {
 	return -1
 }
 
-func (g *Game) CloseWindow(id int) {
+func (g *Game) CloseWindow(id int) bool {
 	i := g.FindWindow(id)
 	
 	if i != -1 {
 		g.windows = append(g.windows[:i], g.windows[i+1:]...) // removes the window
+		return true
 	}
+	return false
 }
 
-func (g *Game) MoveWindowBy(dX, dY float32, id int) {
+func (g *Game) MoveWindowBy(dX, dY float32, id int) bool {
 	i := g.FindWindow(id)
 	
 	if i != -1 {
-		g.windows[i].rect.x += dX
-		g.windows[i].rect.y += dY
+		g.windows[i].rect.X += dX
+		g.windows[i].rect.Y += dY
+		return true
 	}
+	return false
+}
+
+func (g *Game) MoveWindowTo(id int, rect Rect) bool {
+	i := g.FindWindow(id)
+	
+	if i != -1 {
+		g.windows[i].rect = rect
+		return true
+	}
+	
+	return false
 }
 
 func (r *Rect) EnsureMinSize(minW, minH float32) {
-	if r.w < minW {
-		r.w = minW
+	if r.W < minW {
+		r.W = minW
 	}
-	if r.h < minH {
-		r.h = minH
+	if r.H < minH {
+		r.H = minH
 	}
 }
 
@@ -270,17 +299,17 @@ func (g *Game) DragWindowEdgeBy(dX, dY float32, id int, edge Border) {
 	
 	switch edge {
 	case BorderBottom, BorderBottomLeft, BorderBottomRight:
-		g.windows[i].rect.h += dY
+		g.windows[i].rect.H += dY
 	case BorderTop, BorderTopLeft, BorderTopRight:
-		g.windows[i].rect.h -= dY
-		g.windows[i].rect.y += dY
+		g.windows[i].rect.H -= dY
+		g.windows[i].rect.Y += dY
 	}
 	switch edge {
 	case BorderLeft, BorderTopLeft, BorderBottomLeft:
-		g.windows[i].rect.w -= dX
-		g.windows[i].rect.x += dX
+		g.windows[i].rect.W -= dX
+		g.windows[i].rect.X += dX
 	case BorderRight, BorderTopRight, BorderBottomRight:
-		g.windows[i].rect.w += dX
+		g.windows[i].rect.W += dX
 	}
 	
 	g.windows[i].rect.EnsureMinSize(g.minWinWidth, g.minWinHeight)
@@ -296,23 +325,30 @@ func (g *Game) DoButton(id int) {
 	
 	if exists {
 		g.CloseWindow(wId)
+		if g.UserClosedWindow != nil {
+			go g.UserClosedWindow(id)
+		}
 		return
 	}
 }
 
 func (g *Game) Update() error {
 	// calculate positioning
-	if g.setup { // if not setup, initial width might have been 0 (leading to inf)
+	sendSizeUpdate := !g.setup // if we're not yet setup, send this
+	
+	if g.setup && (g.oldwidth != g.width || g.oldheight != g.height) { // if not setup, initial width might have been 0 (leading to inf)
+		sendSizeUpdate = true
+		
 		floatOldWidth := float32(g.oldwidth)
 		floatOldHeight := float32(g.oldheight)
 		floatNewWidth := float32(g.width)
 		floatNewHeight := float32(g.height)
 		
 		for i := range(g.windows) {
-			g.windows[i].rect.x = floatNewWidth*float32(g.windows[i].rect.x)/floatOldWidth
-			g.windows[i].rect.y = floatNewHeight*float32(g.windows[i].rect.y)/floatOldHeight
-			g.windows[i].rect.w = floatNewWidth*float32(g.windows[i].rect.w)/floatOldWidth
-			g.windows[i].rect.h = floatNewHeight*float32(g.windows[i].rect.h)/floatOldHeight
+			g.windows[i].rect.X = floatNewWidth*float32(g.windows[i].rect.X)/floatOldWidth
+			g.windows[i].rect.Y = floatNewHeight*float32(g.windows[i].rect.Y)/floatOldHeight
+			g.windows[i].rect.W = floatNewWidth*float32(g.windows[i].rect.W)/floatOldWidth
+			g.windows[i].rect.H = floatNewHeight*float32(g.windows[i].rect.H)/floatOldHeight
 			
 			g.windows[i].rect.EnsureMinSize(g.minWinWidth, g.minWinHeight)
 		}
@@ -347,6 +383,18 @@ func (g *Game) Update() error {
 		if (g.interaction.interactiontype == InteractionPress) {
 			if (g.interaction.interactabletype == InteractableButton && CoordIn(mX, mY, g.interaction.hitArea)) {
 				g.DoButton(g.interaction.id)
+			}else if (g.interaction.interactabletype == InteractableTitleBar || g.interaction.interactabletype == InteractableWindowEdge) {
+				if g.UserResizedWindow != nil {
+					w_idx := g.FindWindow(g.interaction.id)
+					if w_idx != -1 {
+						g.UserResizedWindow(WindowSimple{
+							ID: g.windows[w_idx].id,
+							Title: g.windows[w_idx].title,
+							Body: g.windows[w_idx].body,
+							Rect: g.windows[w_idx].rect,
+						})
+					}
+				}
 			}
 		}
 		g.interaction = InteractionInfo{}
@@ -370,7 +418,7 @@ func (g *Game) Update() error {
 	for i := range(g.windows) {
 		win := &g.windows[i]
 		
-		expandedRect := Rect{win.rect.x - g.edgeWidth, win.rect.y - g.edgeWidth, win.rect.w + 2*g.edgeWidth, win.rect.h + 2*g.edgeWidth}
+		expandedRect := Rect{win.rect.X - g.edgeWidth, win.rect.Y - g.edgeWidth, win.rect.W + 2*g.edgeWidth, win.rect.H + 2*g.edgeWidth}
 		
 		if doHoverCheck && CoordIn(mX, mY, win.rect) {
 			interactionInfo.interactabletype = InteractableWindow
@@ -383,24 +431,24 @@ func (g *Game) Update() error {
 			interactionInfo.id = win.id
 			interactionInfo.hitArea = expandedRect
 			
-			if mX <= win.rect.x { // left side
-				if mY <= win.rect.y { // top side
+			if mX <= win.rect.X { // left side
+				if mY <= win.rect.Y { // top side
 					interactionInfo.border = BorderTopLeft
-				}else if mY >= win.rect.y+win.rect.h { // bottom side
+				}else if mY >= win.rect.Y+win.rect.H { // bottom side
 					interactionInfo.border = BorderBottomLeft
 				}else { // left middle
 					interactionInfo.border = BorderLeft
 				}
-			}else if mX >= win.rect.x+win.rect.w { // right side
-				if mY <= win.rect.y { // right top
+			}else if mX >= win.rect.X+win.rect.W { // right side
+				if mY <= win.rect.Y { // right top
 					interactionInfo.border = BorderTopRight
-				}else if mY >= win.rect.y+win.rect.h { // right bottom
+				}else if mY >= win.rect.Y+win.rect.H { // right bottom
 					interactionInfo.border = BorderBottomRight
 				}else { // right middle
 					interactionInfo.border = BorderRight
 				}
 			}else{
-				if mY <= win.rect.y { // top
+				if mY <= win.rect.Y { // top
 					interactionInfo.border = BorderTop
 				}else {
 					interactionInfo.border = BorderBottom
@@ -410,9 +458,9 @@ func (g *Game) Update() error {
 			// this means it's in the edges
 		}
 		
-		win.titleBarStrip = win.rect.y+titleBarHeight+g.stripSize
+		win.titleBarStrip = win.rect.Y+titleBarHeight+g.stripSize
 		
-		titlerect := Rect{win.rect.x, win.rect.y, win.rect.w, titleBarHeight+g.stripSize*2}
+		titlerect := Rect{win.rect.X, win.rect.Y, win.rect.W, titleBarHeight+g.stripSize*2}
 		
 		if doHoverCheck && CoordIn(mX, mY, titlerect) {
 			interactionInfo.interactabletype = InteractableTitleBar
@@ -423,10 +471,10 @@ func (g *Game) Update() error {
 		
 		buttonWidth := graphicCloseWidth+2*g.stripSize
 		
-		win.closeButton.rect.x = win.rect.x+win.rect.w-g.stripSize-buttonWidth
-		win.closeButton.rect.y = win.rect.y+g.stripSize
-		win.closeButton.rect.w = buttonWidth
-		win.closeButton.rect.h = titleBarHeight
+		win.closeButton.rect.X = win.rect.X+win.rect.W-g.stripSize-buttonWidth
+		win.closeButton.rect.Y = win.rect.Y+g.stripSize
+		win.closeButton.rect.W = buttonWidth
+		win.closeButton.rect.H = titleBarHeight
 		
 		if doHoverCheck && CoordIn(mX, mY, win.closeButton.rect) {
 			interactionInfo.interactabletype = InteractableButton
@@ -468,10 +516,10 @@ func (g *Game) Update() error {
 	
 	// position sleep button
 	
-	g.sleepButton.rect.x = float32(g.width)/2 - 5*g.textHeight
-	g.sleepButton.rect.y = float32(g.height)/2 - 3*g.textHeight
-	g.sleepButton.rect.w = 10*g.textHeight
-	g.sleepButton.rect.h = 6*g.textHeight
+	g.sleepButton.rect.X = float32(g.width)/2 - 5*g.textHeight
+	g.sleepButton.rect.Y = float32(g.height)/2 - 3*g.textHeight
+	g.sleepButton.rect.W = 10*g.textHeight
+	g.sleepButton.rect.H = 6*g.textHeight
 	
 	if g.sleeping && CoordIn(mX, mY, g.sleepButton.rect) && doHoverCheck {
 		g.interaction.id = g.sleepButton.id
@@ -495,17 +543,31 @@ func (g *Game) Update() error {
 		ebiten.SetCursorShape(ebiten.CursorShapeDefault)
 	}
 	
+	if sendSizeUpdate && g.UISizeChange != nil{
+		list := make([]WindowSimple, len(g.windows))
+		for i,w := range(g.windows) {
+			list[i] = WindowSimple{
+				ID: w.id,
+				Title: w.title,
+				Body: w.body,
+				Rect: w.rect,
+			}
+		}
+		
+		go g.UISizeChange(g.width, g.height, list)
+	}
+	
 	return nil
 }
 
 func (g *Game) DrawStripes(screen *ebiten.Image, rect Rect, stripSize float32, c1, c2 color.RGBA) {
 	g.DrawRect(screen, rect, c1)
 	
-	strips := int(rect.h / g.stripSize / 2.0)
+	strips := int(rect.H / g.stripSize / 2.0)
 	for i := range(strips) {
-		y := rect.y + float32(i) * g.stripSize*2.0
+		y := rect.Y + float32(i) * g.stripSize*2.0
 		
-		sRect := Rect{rect.x, y, rect.w, g.stripSize}
+		sRect := Rect{rect.X, y, rect.W, g.stripSize}
 		g.DrawRect(screen, sRect, c2)
 	}
 }
@@ -513,21 +575,21 @@ func (g *Game) DrawStripes(screen *ebiten.Image, rect Rect, stripSize float32, c
 func (g *Game) DrawBackground(screen *ebiten.Image, rect Rect, stripSize, rectWidth float32, c1, c2 color.RGBA) {
 	g.DrawRect(screen, rect, c1)
 	
-	strips := int(rect.w / g.rectWidth) + 1
+	strips := int(rect.W / g.rectWidth) + 1
 	
 	for i := range(strips) {
-		x := rect.x + float32(i) * g.rectWidth
+		x := rect.X + float32(i) * g.rectWidth
 		
-		sRect := Rect{x, 0, stripSize, rect.h}
+		sRect := Rect{x, 0, stripSize, rect.H}
 		g.DrawRect(screen, sRect, c2)
 	}
 	
-	strips = int(rect.h / g.rectWidth) + 1
+	strips = int(rect.H / g.rectWidth) + 1
 	
 	for i := range(strips) {
-		y := rect.y + float32(i) * g.rectWidth
+		y := rect.Y + float32(i) * g.rectWidth
 		
-		sRect := Rect{0, y, rect.w, stripSize}
+		sRect := Rect{0, y, rect.W, stripSize}
 		g.DrawRect(screen, sRect, c2)
 	}
 }
@@ -537,42 +599,42 @@ func (g *Game) DrawBorder(screen *ebiten.Image, rect Rect, strip float32, c colo
 		strip = 1
 	}
 	
-	g.DrawRect(screen, Rect{rect.x+strip*2, rect.y, rect.w-4*strip, strip}, c)
-	g.DrawRect(screen, Rect{rect.x, rect.y+strip*2, strip, rect.h-4*strip}, c)
-	g.DrawRect(screen, Rect{rect.x+strip*2, rect.y+rect.h-strip, rect.w-4*strip, strip}, c)
-	g.DrawRect(screen, Rect{rect.x+rect.w-strip, rect.y+strip*2, strip, rect.h-4*strip}, c)
+	g.DrawRect(screen, Rect{rect.X+strip*2, rect.Y, rect.W-4*strip, strip}, c)
+	g.DrawRect(screen, Rect{rect.X, rect.Y+strip*2, strip, rect.H-4*strip}, c)
+	g.DrawRect(screen, Rect{rect.X+strip*2, rect.Y+rect.H-strip, rect.W-4*strip, strip}, c)
+	g.DrawRect(screen, Rect{rect.X+rect.W-strip, rect.Y+strip*2, strip, rect.H-4*strip}, c)
 	
-	g.DrawRect(screen, Rect{rect.x+strip, rect.y+strip, strip, strip}, c)
-	g.DrawRect(screen, Rect{rect.x+rect.w-2*strip, rect.y+strip, strip, strip}, c)
-	g.DrawRect(screen, Rect{rect.x+strip, rect.y+rect.h-2*strip, strip, strip}, c)
-	g.DrawRect(screen, Rect{rect.x+rect.w-2*strip, rect.y+rect.h-2*strip, strip, strip}, c)
+	g.DrawRect(screen, Rect{rect.X+strip, rect.Y+strip, strip, strip}, c)
+	g.DrawRect(screen, Rect{rect.X+rect.W-2*strip, rect.Y+strip, strip, strip}, c)
+	g.DrawRect(screen, Rect{rect.X+strip, rect.Y+rect.H-2*strip, strip, strip}, c)
+	g.DrawRect(screen, Rect{rect.X+rect.W-2*strip, rect.Y+rect.H-2*strip, strip, strip}, c)
 }
 
 func (g *Game) DrawGraphic(screen *ebiten.Image, r Rect, graphic Graphic) {
 	r.Inset(g.stripSize)
 	
-	strokeWidth := r.w/8
+	strokeWidth := r.W/8
 	switch graphic {
 	case GraphicClose:
-		vector.StrokeLine(screen, r.x, r.y, r.x+r.w, r.y+r.h, strokeWidth, g.theme.borderColor, true)
-		vector.StrokeLine(screen, r.x+r.w, r.y, r.x, r.y+r.h, strokeWidth, g.theme.borderColor, true)
+		vector.StrokeLine(screen, r.X, r.Y, r.X+r.W, r.Y+r.H, strokeWidth, g.theme.borderColor, true)
+		vector.StrokeLine(screen, r.X+r.W, r.Y, r.X, r.Y+r.H, strokeWidth, g.theme.borderColor, true)
 	case GraphicSleep:
 		w, h := text.Measure("Sleeping", g.face, 0)
-		x := r.x+r.w/2 - float32(w)/2
-		y := r.y+r.h/2 - float32(h)/2
+		x := r.X+r.W/2 - float32(w)/2
+		y := r.Y+r.H/2 - float32(h)/2
 		g.DrawTextLine(screen, x, y, r, "Sleeping", g.theme.textColor)
 	}
 }
 
 func (g *Game) DrawRect(screen *ebiten.Image, rect Rect, c color.RGBA) {
-	vector.FillRect(screen, rect.x, rect.y, rect.w, rect.h, c, false) // top bar
+	vector.FillRect(screen, rect.X, rect.Y, rect.W, rect.H, c, false) // top bar
 }
 
 func (r *Rect) Inset(amount float32) {
-	r.x += amount
-	r.y += amount
-	r.w -= 2*amount
-	r.h -= 2*amount
+	r.X += amount
+	r.Y += amount
+	r.W -= 2*amount
+	r.H -= 2*amount
 }
 
 func (g *Game) DrawButton(screen *ebiten.Image, button Button) {
@@ -599,16 +661,16 @@ func (g *Game) DrawButton(screen *ebiten.Image, button Button) {
 }
 
 func (g *Game) DrawTitleBar(screen *ebiten.Image, w *Window) {
-	titleRect := Rect{w.rect.x+g.stripSize, w.rect.y+g.stripSize, w.rect.w-2*g.stripSize, w.titleBarStrip-w.rect.y-g.stripSize}
+	titleRect := Rect{w.rect.X+g.stripSize, w.rect.Y+g.stripSize, w.rect.W-2*g.stripSize, w.titleBarStrip-w.rect.Y-g.stripSize}
 	g.DrawRect(screen, titleRect, g.theme.titleBackground)
-	vector.FillRect(screen, w.rect.x, w.titleBarStrip, w.rect.w, g.stripSize, g.theme.borderColor, false) // top bar
+	vector.FillRect(screen, w.rect.X, w.titleBarStrip, w.rect.W, g.stripSize, g.theme.borderColor, false) // top bar
 	g.DrawButton(screen, w.closeButton)
-	maxWidth := w.rect.w-3*g.stripSize-w.closeButton.rect.w
+	maxWidth := w.rect.W-3*g.stripSize-w.closeButton.rect.W
 	
-	textX := w.rect.x+g.stripSize*2
-	textY := w.rect.y+g.stripSize*2
+	textX := w.rect.X+g.stripSize*2
+	textY := w.rect.Y+g.stripSize*2
 	
-	rectDrawIn := Rect{textX, textY, maxWidth, w.closeButton.rect.h}
+	rectDrawIn := Rect{textX, textY, maxWidth, w.closeButton.rect.H}
 	g.DrawTextLine(screen, textX, textY, rectDrawIn, w.title, g.theme.textColor)
 }
 
@@ -616,10 +678,10 @@ func (g *Game) DrawTextLine(screen *ebiten.Image, x, y float32, maxR Rect, todra
 	y -= g.textOffset
 	
 	clipRect := image.Rect(
-		int(maxR.x),
-		int(maxR.y),
-		int(maxR.w+maxR.x),
-		int(maxR.h+maxR.y),
+		int(maxR.X),
+		int(maxR.Y),
+		int(maxR.W+maxR.X),
+		int(maxR.H+maxR.Y),
 	)
 
 	clippedScreen := screen.SubImage(clipRect).(*ebiten.Image)
@@ -707,14 +769,14 @@ func (g *Game) DrawWorkers(screen *ebiten.Image) {
 	
 	fullRect = Rect{
 		leftEdge,
-		fullRect.y+fullRect.h+g.stripSize,
+		fullRect.Y+fullRect.H+g.stripSize,
 		boxWidth+2*g.stripSize,
 		boxHeight,
 	}
 	
 	g.DrawBorder(screen, fullRect, g.stripSize, g.theme.borderColor)
 	for i, line := range(strings.Split(costText, "\n")) {
-		g.DrawTextLine(screen, leftEdge+g.stripSize*2, g.stripSize*2+fullRect.y+float32(height)*float32(i), fullRect, line, g.theme.textColor)
+		g.DrawTextLine(screen, leftEdge+g.stripSize*2, g.stripSize*2+fullRect.Y+float32(height)*float32(i), fullRect, line, g.theme.textColor)
 	}
 }
 
@@ -789,7 +851,7 @@ func (g *Game) GetNewId() int {
 	return g.lastId
 }
 
-func (g *Game) AddWindow(title, body string, rect Rect) {
+func (g *Game) AddWindow(title, body string, rect Rect) int {
 	var win Window
 	win.id = g.GetNewId()
 	win.closeButton.id = g.GetNewId()
@@ -802,19 +864,20 @@ func (g *Game) AddWindow(title, body string, rect Rect) {
 	win.title = title
 	win.body  = body
 	g.windows = append(g.windows, win)
+	return win.id
 }
 
 func (g *Game) ChooseRect() Rect {
 	var r Rect
-	r.w = 300
-	r.h = 300
+	r.W = 300
+	r.H = 300
 	
-	rangeX := g.width-int(r.w)
-	rangeY := g.height-int(r.h)
+	rangeX := g.width-int(r.W)
+	rangeY := g.height-int(r.H)
 	
 	if g.width == 0 {
-		rangeX = g.startwidth-int(r.w)
-		rangeY = g.startheight-int(r.h)
+		rangeX = g.startwidth-int(r.W)
+		rangeY = g.startheight-int(r.H)
 	}
 	if (rangeX < 1){
 		rangeX = 1
@@ -823,8 +886,8 @@ func (g *Game) ChooseRect() Rect {
 		rangeY = 1
 	}
 	
-	r.x = float32(rand.IntN(rangeX))
-	r.y = float32(rand.IntN(rangeY))
+	r.X = float32(rand.IntN(rangeX))
+	r.Y = float32(rand.IntN(rangeY))
 	
 	return r
 }

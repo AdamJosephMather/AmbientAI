@@ -13,6 +13,29 @@ type AddWindowTool struct {
 	Tool  string `json:"tool"`
 	Title string `json:"title"`
 	Body  string `json:"body"`
+	X     *int   `json:"x,omitempty"`
+	Y     *int   `json:"y,omitempty"`
+	W     *int   `json:"w,omitempty"`
+	H     *int   `json:"h,omitempty"`
+}
+
+type DelWindowTool struct {
+	Tool  string `json:"tool"`
+	ID    int    `json:"id"`
+}
+
+type HighlightWindowTool struct {
+	Tool  string `json:"tool"`
+	ID    int    `json:"id"`
+}
+
+type ResizeWindowTool struct {
+	Tool  string `json:"tool"`
+	ID    int    `json:"id"`
+	X     int    `json:"x"`
+	Y     int    `json:"y"`
+	W     int    `json:"w"`
+	H     int    `json:"h"`
 }
 
 type InvokeWorkerTool struct {
@@ -62,7 +85,28 @@ func (t *ToolWrapper) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		t.Value = tool
-
+	
+	case "del_window":
+		var tool DelWindowTool
+		if err := json.Unmarshal(data, &tool); err != nil {
+			return err
+		}
+		t.Value = tool
+	
+	case "highlight_window":
+		var tool HighlightWindowTool
+		if err := json.Unmarshal(data, &tool); err != nil {
+			return err
+		}
+		t.Value = tool
+	
+	case "resize_window":
+		var tool ResizeWindowTool
+		if err := json.Unmarshal(data, &tool); err != nil {
+			return err
+		}
+		t.Value = tool
+	
 	default:
 		// Optional fallback for unknown/future tools so it doesn't crash
 		var generic map[string]any
