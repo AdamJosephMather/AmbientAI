@@ -40,9 +40,9 @@ func registration() json.RawMessage {
 	}, "additionalProperties": false}
 	tools := []tool{
 		{"play", "Play the first playable Spotify search result matching song_name, artist_name, or both, starting at that track within its album when available so next/previous can navigate surrounding tracks. With neither, resume. Keep an already playing device; otherwise start only on this computer, launching Spotify and waiting if necessary. Briefly wait for Spotify to report the requested playback. Returns song_name, artist_names, and is_playing. A successful response with is_playing null means Spotify accepted the command but confirmation is pending, not failure; do not automatically retry play.", play},
-		{"next_song", "Skip to the next song on the current Spotify device without moving playback or launching Spotify.", empty},
-		{"prev_song", "Go to the previous song on the current Spotify device (Spotify may restart the current song). Do not move playback or launch Spotify.", empty},
-		{"pause", "Pause playback on the current Spotify device without moving playback or launching Spotify.", empty},
+		{"next_song", "Skip to the next song on the current Spotify device without moving playback or launching Spotify. Briefly wait for the change. A successful response with is_playing null means accepted but confirmation pending, not failure; do not automatically retry the skip.", empty},
+		{"prev_song", "Go to the previous song on the current Spotify device (Spotify may restart the current song). Do not move playback or launch Spotify. Briefly wait for a track change or restart. A successful response with is_playing null means accepted but confirmation pending, not failure; do not automatically retry the skip.", empty},
+		{"pause", "Pause playback on the current Spotify device without moving playback or launching Spotify. Briefly wait for paused state. A successful response with is_playing null means accepted but confirmation pending, not failure; do not automatically retry pause.", empty},
 		{"resume", "Resume Spotify on an already playing device; otherwise start only on this computer, launching Spotify and waiting if necessary. A successful response with is_playing null means Spotify accepted the command but confirmation is pending, not failure; do not automatically retry resume.", empty},
 		{"get_current_song", "Get only song_name, artist_names, and is_playing, including playback on other devices. Song name is null when nothing is available. Does not launch Spotify.", empty},
 	}

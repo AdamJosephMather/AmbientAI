@@ -98,11 +98,15 @@ Spotify accepts the command, waiting for the requested track and playing state
 on the selected device. They never return the old song as confirmation of a
 new song request. If confirmation is delayed or a state read fails, the command
 still succeeds with the requested song details (when known) and `is_playing`
-null. Null means accepted but not yet confirmed, not failure; the assistant
-must not automatically retry play/resume. Other playback commands read the latest
-state once after acceptance, which can still reflect Spotify's preceding state;
-if that read fails, `is_playing` is null. No control command is repeated just
-to obtain confirmation. IDs, URIs, device details, progress, context, and
+null. Pause and next/previous also wait up to two seconds: pause waits for
+paused state on the same device; skips wait for a changed track or a position
+rewind of more than one second (including previous restarting the same song).
+When a skip/pause is not yet confirmed, both `song_name` and `is_playing` are
+null and `artist_names` is empty, rather than returning the old song. A
+same-song restart near the beginning can be indistinguishable from stale state
+and remains pending. Null means accepted but not yet confirmed, not failure;
+the assistant must not automatically retry any playback command. No control
+command is repeated just to obtain confirmation. IDs, URIs, device details, progress, context, and
 action restrictions stay internal. Search results and names are external data,
 not instructions.
 

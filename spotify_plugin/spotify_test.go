@@ -210,7 +210,11 @@ func TestControlsDoNotLaunchOrMovePlayback(t *testing.T) {
 			var commands atomic.Int32
 			s := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/me/player" {
-					fmt.Fprint(w, `{"is_playing":true,"device":{"id":"remote"}}`)
+					uri := "spotify:track:old"
+					if commands.Load() > 0 && tc.name != "pause" {
+						uri = "spotify:track:new"
+					}
+					writeJSON(w, playback{Playing: tc.name != "pause" || commands.Load() == 0, Device: device{ID: "remote"}, Song: &track{URI: uri}})
 					return
 				}
 				commands.Add(1)
@@ -226,6 +230,96 @@ func TestControlsDoNotLaunchOrMovePlayback(t *testing.T) {
 				t.Fatal("expected exactly one command")
 			}
 		})
+	}
+}
+
+func TestControlsWaitForStateChangeWithoutRepeatingCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name, command string
+		restart       bool
+	}{
+		{"next track", "next_song", false},
+		{"previous track", "prev_song", false},
+		{"previous restarts current", "prev_song", true},
+		{"next repeats same track", "next_song", true},
+		{"pause", "pause", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var commands, afterReads atomic.Int32
+			s := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/me/player" {
+					commands.Add(1)
+					w.WriteHeader(204)
+					return
+				}
+				p := playback{Playing: true, Device: device{ID: "remote"}, Song: &track{URI: "spotify:track:old", Name: "Old song"}, ProgressMS: 12000}
+				if commands.Load() > 0 && afterReads.Add(1) >= 2 {
+					if tc.command == "pause" {
+						p.Playing = false
+					} else if tc.restart {
+						p.ProgressMS = 100
+					} else {
+						p.Song = &track{URI: "spotify:track:new", Name: "New song"}
+					}
+				}
+				writeJSON(w, p)
+			})
+			result, err := s.call(context.Background(), tc.command, json.RawMessage(`{}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := result.(songResult)
+			wantName := "New song"
+			if tc.command == "pause" || tc.restart {
+				wantName = "Old song"
+			}
+			if got.SongName == nil || *got.SongName != wantName || got.IsPlaying == nil || *got.IsPlaying != (tc.command != "pause") {
+				t.Fatalf("returned unconfirmed state: %+v", got)
+			}
+			if commands.Load() != 1 || afterReads.Load() != 2 {
+				t.Fatalf("unexpected commands/reads: %d/%d", commands.Load(), afterReads.Load())
+			}
+		})
+	}
+}
+
+func TestUnconfirmedControlsReturnUnknownWithoutOldSongOrRetry(t *testing.T) {
+	for _, command := range []string{"next_song", "prev_song", "pause"} {
+		for _, mode := range []string{"stale", "read failure", "other device"} {
+			t.Run(command+"/"+mode, func(t *testing.T) {
+				var commands atomic.Int32
+				s := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path != "/me/player" {
+						commands.Add(1)
+						w.WriteHeader(204)
+						return
+					}
+					p := playback{Playing: true, Device: device{ID: "remote"}, Song: &track{URI: "spotify:track:old", Name: "Old song"}, ProgressMS: 12000}
+					if commands.Load() > 0 {
+						switch mode {
+						case "read failure":
+							w.WriteHeader(503)
+							return
+						case "other device":
+							p.Device.ID = "other"
+							p.Song = &track{URI: "spotify:track:new", Name: "Other device song"}
+							p.Playing = command != "pause"
+						}
+					}
+					writeJSON(w, p)
+				})
+				ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+				defer cancel()
+				result, err := s.call(ctx, command, json.RawMessage(`{}`))
+				if err != nil {
+					t.Fatalf("accepted command became an error: %v", err)
+				}
+				got := result.(songResult)
+				if got.SongName != nil || len(got.ArtistNames) != 0 || got.IsPlaying != nil || commands.Load() != 1 {
+					t.Fatalf("returned stale state or repeated command: %+v; commands=%d", got, commands.Load())
+				}
+			})
+		}
 	}
 }
 

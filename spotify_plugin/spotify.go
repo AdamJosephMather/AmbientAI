@@ -52,8 +52,8 @@ type playback struct {
 }
 
 // Model-facing results deliberately exclude Spotify's control identifiers and
-// diagnostic metadata. A nil playing state means a command succeeded but its
-// follow-up state read failed, so callers must not infer playback was observed.
+// diagnostic metadata. A nil playing state means a command was accepted but
+// confirmation is pending/unavailable, so callers must not infer failure.
 type songResult struct {
 	SongName    *string  `json:"song_name"`
 	ArtistNames []string `json:"artist_names"`
@@ -71,18 +71,9 @@ func summarizeSong(song *track, playing *bool) songResult {
 	return result
 }
 
-func (s *spotify) commandResult(ctx context.Context, fallback *track) songResult {
-	p, err := s.current(ctx)
-	if err != nil {
-		return summarizeSong(fallback, nil)
-	}
-	return summarizeSong(p.Song, &p.Playing)
-}
-
-// Spotify can acknowledge play before GET /me/player reflects the new track.
-// Poll state only (never replay the command), and never return the old song as
-// the result of a successful request to start a different one.
-func (s *spotify) playResult(ctx context.Context, selected *track, target device) songResult {
+// Spotify can acknowledge commands before GET /me/player reflects the change.
+// Poll only state, never replay a command to obtain confirmation.
+func (s *spotify) waitForPlayback(ctx context.Context, fallback *track, confirmed func(playback) bool) songResult {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	for {
@@ -90,21 +81,47 @@ func (s *spotify) playResult(ctx context.Context, selected *track, target device
 		if err != nil {
 			break
 		}
-		matches := selected == nil || (p.Song != nil && p.Song.URI == selected.URI)
-		if p.Playing && p.Device.ID == target.ID && matches {
+		if confirmed(p) {
 			return summarizeSong(p.Song, &p.Playing)
 		}
 		timer := time.NewTimer(250 * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return summarizeSong(selected, nil)
+			return summarizeSong(fallback, nil)
 		case <-timer.C:
 		}
 	}
-	// Spotify accepted the command, but confirmation is pending/unavailable.
-	// Preserve the requested song and mark its observed playing state unknown.
-	return summarizeSong(selected, nil)
+	return summarizeSong(fallback, nil)
+}
+
+func (s *spotify) playResult(ctx context.Context, selected *track, target device) songResult {
+	return s.waitForPlayback(ctx, selected, func(p playback) bool {
+		matches := selected == nil || (p.Song != nil && p.Song.URI == selected.URI)
+		return p.Playing && p.Device.ID == target.ID && matches
+	})
+}
+
+func (s *spotify) controlResult(ctx context.Context, command string, before playback) songResult {
+	// No old song fallback: until a skip/pause is confirmed, the current song
+	// is unknown. Keep the same compact result and its accepted/pending semantics.
+	return s.waitForPlayback(ctx, nil, func(p playback) bool {
+		if p.Device.ID != before.Device.ID {
+			return false
+		}
+		if command == "pause" {
+			return !p.Playing
+		}
+		if p.Song == nil || p.Song.URI == "" {
+			return false
+		}
+		if before.Song == nil || p.Song.URI != before.Song.URI {
+			return true
+		}
+		// Previous may restart the same track; next can also repeat the same
+		// URI. A substantial position rewind confirms that observable change.
+		return before.ProgressMS-p.ProgressMS > 1000
+	})
 }
 
 type apiError struct {
@@ -440,11 +457,7 @@ func (s *spotify) call(ctx context.Context, name string, raw json.RawMessage) (a
 		if err != nil {
 			return nil, err
 		}
-		// After a skip, the old song is not a meaningful fallback.
-		if name != "pause" {
-			p.Song = nil
-		}
-		return s.commandResult(ctx, p.Song), nil
+		return s.controlResult(ctx, name, p), nil
 	default:
 		return nil, fmt.Errorf("unknown Spotify tool")
 	}

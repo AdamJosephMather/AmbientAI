@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
@@ -161,6 +162,7 @@ type Game struct {
 	width, height int
 	oldwidth, oldheight int
 	startwidth, startheight int
+	sizeChanges sizeChangeNotifier
 	
 	oldMx, oldMy float32
 	
@@ -334,11 +336,7 @@ func (g *Game) DoButton(id int) {
 
 func (g *Game) Update() error {
 	// calculate positioning
-	sendSizeUpdate := !g.setup // if we're not yet setup, send this
-	
 	if g.setup && (g.oldwidth != g.width || g.oldheight != g.height) { // if not setup, initial width might have been 0 (leading to inf)
-		sendSizeUpdate = true
-		
 		floatOldWidth := float32(g.oldwidth)
 		floatOldHeight := float32(g.oldheight)
 		floatNewWidth := float32(g.width)
@@ -543,7 +541,7 @@ func (g *Game) Update() error {
 		ebiten.SetCursorShape(ebiten.CursorShapeDefault)
 	}
 	
-	if sendSizeUpdate && g.UISizeChange != nil{
+	if g.UISizeChange != nil && g.sizeChanges.update(g.width, g.height, time.Now(), nativeResizeInProgress()) {
 		list := make([]WindowSimple, len(g.windows))
 		for i,w := range(g.windows) {
 			list[i] = WindowSimple{
