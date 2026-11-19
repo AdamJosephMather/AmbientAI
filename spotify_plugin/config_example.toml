@@ -1,0 +1,21 @@
+# Each user creates their own app at https://developer.spotify.com/dashboard.
+# PKCE uses a client ID, not a client secret. Spotify Premium is required.
+client_id = ""
+# Register this exact redirect URI in your Spotify developer app settings.
+redirect_uri = "http://127.0.0.1:8765/callback"
+# Relative paths resolve beside this config. Contains private OAuth credentials.
+token_file = "tokens.json"
+
+# Blank: detect the system hostname (macOS: ComputerName). Set this to the
+# exact Spotify Connect device name if automatic detection doesn't match.
+device_name = ""
+# Optional stronger match; takes precedence over device_name. Spotify IDs can change.
+device_id = ""
+
+# Poll only when enabled; emit notifications when song identity changes.
+send_song_updates = false
+poll_interval_seconds = 10
+request_timeout_seconds = 10
+device_wait_seconds = 25
+call_timeout_seconds = 50
+# Set the host's [plugins].call_timeout_seconds above this value (e.g. 60).

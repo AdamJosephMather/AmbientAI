@@ -45,7 +45,9 @@ model_smart_reasoning = "medium"
 [plugins]
 # Executable paths (no shell commands). Relative paths use Zoe's working directory.
 # Example: paths = ["example_plugin/ambient-example-plugin.exe"]
-# Build with: go -C brave_search_plugin build -o brave_search_plugin.exe .
+# In this directory: example_plugin, spotify_plugin, brave_search_plugin
+
+# Build search with: go -C brave_search_plugin build -o brave_search_plugin.exe .
 # Set the Brave API key in brave_search_plugin/config.toml (see its README).
 paths = ["brave_search_plugin/brave_search_plugin.exe"]
 call_timeout_seconds = 30

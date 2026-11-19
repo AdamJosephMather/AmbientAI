@@ -9,6 +9,11 @@ provided by the [Brave Search plugin](brave_search_plugin/README.md), which retu
 source results for the worker to interpret. Plugins can also send unsolicited
 `plugin/notify` updates, such as a song change, without a tool call.
 
+The [Spotify plugin](spotify_plugin/README.md) provides song/artist playback,
+pause/resume, skip controls, and current-song lookup to both models, with optional
+song-change updates. Each user supplies their own Spotify developer app and
+authorizes their Premium account; setup and device selection are documented there.
+
 ## TTS audio formats
 
 Playback reads the audio format from each TTS response instead of assuming a
