@@ -18,6 +18,10 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 )
 
+type UIConfig struct {
+	FontSize int `toml:"font_size"`
+}
+
 type Theme struct {
 	windowBackground    color.RGBA
 	titleBackground    color.RGBA
@@ -147,6 +151,8 @@ type Game struct {
 	faceSource *text.GoTextFaceSource
 	face       *text.GoTextFace
 	markdownSources [8]*text.GoTextFaceSource
+	
+	config *UIConfig
 	
 	setup bool
 	lastId int
@@ -913,7 +919,7 @@ func loadIcon() ([]image.Image, error) {
 	return out, nil
 }
 
-func SetupUI(title string) (*Game, error) {
+func SetupUI(title string, c *UIConfig) (*Game, error) {
 	os.Setenv("EBITENGINE_GRAPHICS_LIBRARY", "opengl")
 	
 	icons, err := loadIcon()
@@ -929,13 +935,21 @@ func SetupUI(title string) (*Game, error) {
 	ebiten.SetPreferredColorMode(ebiten.ColorModeDark)
 	
 	var game Game
+	game.config = c
 	game.minWinHeight   = 100
 	game.minWinWidth    = 100
 	game.startwidth     = 640
 	game.startheight    = 480
 	game.buttonToWindow = make(map[int]int)
 	game.SetupTheme()
-	err = game.SetupText(17)
+	
+	if game.config.FontSize <= 0 {
+		game.config.FontSize = 18
+	} else if game.config.FontSize > 100 {
+		game.config.FontSize = 100
+	}
+	
+	err = game.SetupText(game.config.FontSize)
 	if err != nil {
 		return nil, err
 	}

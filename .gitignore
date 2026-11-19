@@ -3,3 +3,4 @@ brave_search_plugin/*.exe
 spotify_plugin/*.exe
 spotify_plugin/tokens.json
 spotify_plugin/.spotify-tokens-*
+AmbientAI.exe

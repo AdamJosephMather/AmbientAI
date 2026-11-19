@@ -572,7 +572,7 @@ func main() {
 	println("Starting...")
 	sleepctl.SetCanSleep(false)
 
-	vadConfig, trscribe, cht, spch, aicn, pluginConfig, err := ReadConfig("config.toml")
+	vadConfig, trscribe, cht, spch, aicn, pluginConfig, uiConfig, err := ReadConfig("config.toml")
 
 	if err != nil {
 		fmt.Printf("Config load error: %s\n", err.Error())
@@ -588,7 +588,7 @@ func main() {
 	defer plugins.Close()
 	workerTools = append(workerTools, plugins.WorkerTools()...)
 
-	game, err = ui.SetupUI(aicn.AIName) // must come before VAD setup
+	game, err = ui.SetupUI(aicn.AIName, uiConfig) // must come before VAD setup
 	if err != nil {
 		fmt.Println(err.Error())
 		return

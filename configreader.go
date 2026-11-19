@@ -7,6 +7,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"net/http"
 	"time"
+	"AmbientAI/ui"
 )
 
 type VADConfig struct {
@@ -28,37 +29,38 @@ type Config struct {
 	Chat          openrouter.ChatConfig          `toml:"chat"`
 	TTS           openrouter.TTSConfig           `toml:"tts"`
 	Vad           VADConfig                      `toml:"vad"`
+	UI            ui.UIConfig                    `toml:"ui"`
 	AI            AIConfig                       `toml:"ai"`
 	Plugins       PluginConfig                   `toml:"plugins"`
 }
 
-func ReadConfig(configPath string) (*VADConfig, *openrouter.Transcriber, *openrouter.Chat, *openrouter.TTS, *AIConfig, *PluginConfig, error) {
+func ReadConfig(configPath string) (*VADConfig, *openrouter.Transcriber, *openrouter.Chat, *openrouter.TTS, *AIConfig, *PluginConfig, *ui.UIConfig, error) {
 	var config Config
 
 	if _, err := toml.DecodeFile(configPath, &config); err != nil {
-		return nil, nil, nil, nil, nil, nil, fmt.Errorf("load config: %w", err)
+		return nil, nil, nil, nil, nil, nil, nil, fmt.Errorf("load config: %w", err)
 	}
 	if config.Plugins.CallTimeoutSeconds < 0 || int64(config.Plugins.CallTimeoutSeconds) > int64((time.Duration(1<<63-1))/time.Second) {
-		return nil, nil, nil, nil, nil, nil, errors.New("plugin call_timeout_seconds must be nonnegative and fit in a Go duration")
+		return nil, nil, nil, nil, nil, nil, nil, errors.New("plugin call_timeout_seconds must be nonnegative and fit in a Go duration")
 	}
 
 	if config.Transcription.APIKey == "" {
-		return nil, nil, nil, nil, nil, nil, errors.New("transcription API key is empty")
+		return nil, nil, nil, nil, nil, nil, nil, errors.New("transcription API key is empty")
 	}
 
 	if config.Chat.APIKey == "" {
-		return nil, nil, nil, nil, nil, nil, errors.New("chat API key is empty")
+		return nil, nil, nil, nil, nil, nil, nil, errors.New("chat API key is empty")
 	}
 
 	if config.TTS.APIKey == "" {
-		return nil, nil, nil, nil, nil, nil, errors.New("tts API key is empty")
+		return nil, nil, nil, nil, nil, nil, nil, errors.New("tts API key is empty")
 	}
 	if _, err := config.TTS.StreamingEnabled(); err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, nil, err
 	}
 
 	if config.Vad.Path == "" {
-		return nil, nil, nil, nil, nil, nil, errors.New("VAD Model Path is empty")
+		return nil, nil, nil, nil, nil, nil, nil, errors.New("VAD Model Path is empty")
 	}
 
 	if config.Transcription.Model == "" {
@@ -84,5 +86,5 @@ func ReadConfig(configPath string) (*VADConfig, *openrouter.Transcriber, *openro
 		Client: &http.Client{
 			Timeout: 60 * time.Second,
 		},
-	}, &config.AI, &config.Plugins, nil
+	}, &config.AI, &config.Plugins, &config.UI, nil
 }

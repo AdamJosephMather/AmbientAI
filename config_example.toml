@@ -29,6 +29,9 @@ mode = "auto"
 
 response_format = "pcm"
 
+[ui]
+font_size = 18 # pixels
+
 [vad]
 path = "vad/silero_vad.bin"
 
