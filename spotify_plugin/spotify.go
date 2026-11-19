@@ -79,6 +79,34 @@ func (s *spotify) commandResult(ctx context.Context, fallback *track) songResult
 	return summarizeSong(p.Song, &p.Playing)
 }
 
+// Spotify can acknowledge play before GET /me/player reflects the new track.
+// Poll state only (never replay the command), and never return the old song as
+// the result of a successful request to start a different one.
+func (s *spotify) playResult(ctx context.Context, selected *track, target device) songResult {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	for {
+		p, err := s.current(ctx)
+		if err != nil {
+			break
+		}
+		matches := selected == nil || (p.Song != nil && p.Song.URI == selected.URI)
+		if p.Playing && p.Device.ID == target.ID && matches {
+			return summarizeSong(p.Song, &p.Playing)
+		}
+		timer := time.NewTimer(250 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return summarizeSong(selected, nil)
+		case <-timer.C:
+		}
+	}
+	// Spotify accepted the command, but confirmation is pending/unavailable.
+	// Preserve the requested song and mark its observed playing state unknown.
+	return summarizeSong(selected, nil)
+}
+
 type apiError struct {
 	Status     int
 	RetryAfter int
@@ -392,7 +420,7 @@ func (s *spotify) call(ctx context.Context, name string, raw json.RawMessage) (a
 		if err := s.api(ctx, "PUT", "/me/player/play?"+url.Values{"device_id": {d.ID}}.Encode(), body, nil); err != nil {
 			return nil, err
 		}
-		return s.commandResult(ctx, selected), nil
+		return s.playResult(ctx, selected, d), nil
 	case "pause", "next_song", "prev_song":
 		p, err := s.current(ctx)
 		if err != nil {

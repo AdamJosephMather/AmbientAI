@@ -47,7 +47,7 @@ func TestPlaySearchKeepsPlayingDevice(t *testing.T) {
 					}
 					fmt.Fprint(w, `{"tracks":{"items":[{"uri":"spotify:track:blocked","is_playable":false},{"uri":"spotify:track:match","name":"Matched song","album":{"uri":"spotify:album:matched-album"}}]}}`)
 				case "/me/player":
-					fmt.Fprint(w, `{"is_playing":true,"device":{"id":"remote","name":"Kitchen","type":"speaker"}}`)
+					fmt.Fprint(w, `{"is_playing":true,"device":{"id":"remote","name":"Kitchen","type":"speaker"},"item":{"uri":"spotify:track:match"}}`)
 				case "/me/player/play":
 					plays.Add(1)
 					if r.Method != "PUT" || r.URL.Query().Get("device_id") != "remote" {
@@ -88,7 +88,11 @@ func TestResumeLaunchesAndWaitsOnlyForLocal(t *testing.T) {
 			s := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/me/player":
-					fmt.Fprint(w, `{"is_playing":false,"device":{"id":"remote","name":"Kitchen"}}`)
+					if plays.Load() > 0 {
+						fmt.Fprint(w, `{"is_playing":true,"device":{"id":"local"}}`)
+					} else {
+						fmt.Fprint(w, `{"is_playing":false,"device":{"id":"remote","name":"Kitchen"}}`)
+					}
 				case "/me/player/devices":
 					count := discoveries.Add(1)
 					if launched.Load() && count >= 3 {
@@ -360,7 +364,7 @@ func TestSearchPlaybackFallsBackWhenAlbumUnavailable(t *testing.T) {
 			case "/search":
 				fmt.Fprint(w, `{"tracks":{"items":[{"uri":"spotify:track:match"`+album+`}]}}`)
 			case "/me/player":
-				fmt.Fprint(w, `{"is_playing":true,"device":{"id":"remote"}}`)
+				fmt.Fprint(w, `{"is_playing":true,"device":{"id":"remote"},"item":{"uri":"spotify:track:match"}}`)
 			case "/me/player/play":
 				var body struct {
 					URIs    []string `json:"uris"`
@@ -378,5 +382,78 @@ func TestSearchPlaybackFallsBackWhenAlbumUnavailable(t *testing.T) {
 		if _, err := s.call(context.Background(), "play", json.RawMessage(`{"song_name":"test"}`)); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestPlayWaitsForRequestedSongInsteadOfReturningPreviousSong(t *testing.T) {
+	var plays, afterReads atomic.Int32
+	s := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/search":
+			fmt.Fprint(w, `{"tracks":{"items":[{"uri":"spotify:track:new","name":"New song","artists":[{"name":"New artist"}]}]}}`)
+		case "/me/player/play":
+			plays.Add(1)
+			w.WriteHeader(204)
+		case "/me/player":
+			if plays.Load() > 0 && afterReads.Add(1) >= 2 {
+				fmt.Fprint(w, `{"is_playing":true,"device":{"id":"remote"},"item":{"uri":"spotify:track:new","name":"New song","artists":[{"name":"New artist"}]}}`)
+			} else {
+				fmt.Fprint(w, `{"is_playing":true,"device":{"id":"remote"},"item":{"uri":"spotify:track:old","name":"Old song"}}`)
+			}
+		default:
+			t.Errorf("unexpected request: %s", r.URL)
+			w.WriteHeader(500)
+		}
+	})
+	result, err := s.call(context.Background(), "play", json.RawMessage(`{"song_name":"New song"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := result.(songResult)
+	if got.SongName == nil || *got.SongName != "New song" || len(got.ArtistNames) != 1 || got.ArtistNames[0] != "New artist" || got.IsPlaying == nil || !*got.IsPlaying {
+		t.Fatalf("returned stale or unconfirmed song: %+v", got)
+	}
+	if plays.Load() != 1 || afterReads.Load() != 2 {
+		t.Fatal("should poll state without repeating playback command")
+	}
+}
+
+func TestAcceptedPlayWithUnconfirmedStateNeverReturnsOldSongOrRetries(t *testing.T) {
+	for _, stateFails := range []bool{false, true} {
+		t.Run(fmt.Sprint("stateFails=", stateFails), func(t *testing.T) {
+			var plays atomic.Int32
+			s := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/search":
+					fmt.Fprint(w, `{"tracks":{"items":[{"uri":"spotify:track:new","name":"New song","artists":[{"name":"New artist"}]}]}}`)
+				case "/me/player/play":
+					plays.Add(1)
+					w.WriteHeader(204)
+				case "/me/player":
+					if stateFails && plays.Load() > 0 {
+						w.WriteHeader(503)
+						return
+					}
+					fmt.Fprint(w, `{"is_playing":true,"device":{"id":"remote"},"item":{"uri":"spotify:track:old","name":"Old song"}}`)
+				default:
+					t.Errorf("unexpected request: %s", r.URL)
+					w.WriteHeader(500)
+				}
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			result, err := s.call(ctx, "play", json.RawMessage(`{"song_name":"New song"}`))
+			if err != nil {
+				t.Fatalf("accepted play became an error: %v", err)
+			}
+			got := result.(songResult)
+			if got.SongName == nil || *got.SongName != "New song" || got.IsPlaying != nil || plays.Load() != 1 {
+				t.Fatalf("wrong pending result or repeated command: %+v", got)
+			}
+			data, err := json.Marshal(got)
+			if err != nil || strings.Contains(string(data), "uri") || strings.Contains(string(data), "Old song") {
+				t.Fatalf("leaked stale state/metadata: %s %v", data, err)
+			}
+		})
 	}
 }
