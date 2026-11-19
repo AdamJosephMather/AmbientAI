@@ -1,5 +1,14 @@
 # Ambient
 
+## Executable plugins
+
+Zoe supports frontend and worker tools provided by local executables over stdio.
+See [the plugin protocol and example](example_plugin/README.md) for setup,
+registration, request/response formats, and test tools. Worker web search is
+provided by the [Brave Search plugin](brave_search_plugin/README.md), which returns
+source results for the worker to interpret. Plugins can also send unsolicited
+`plugin/notify` updates, such as a song change, without a tool call.
+
 ## TTS audio formats
 
 Playback reads the audio format from each TTS response instead of assuming a

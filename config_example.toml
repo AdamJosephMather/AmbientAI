@@ -9,7 +9,7 @@ api_key = "sk-or-v1-"
 url = "https://openrouter.ai/api/v1/chat/completions"
 temperature = 0.7
 max_tokens = 4096
-# Separate budget for worker reasoning, tool calls, and search summaries.
+# Separate budget for worker reasoning and tool calls.
 tool_max_tokens = 16384
 
 [tts]
@@ -41,3 +41,11 @@ model_fast_reasoning = "none"
 
 model_smart = "~deepseek/deepseek-flash-latest"
 model_smart_reasoning = "medium"
+
+[plugins]
+# Executable paths (no shell commands). Relative paths use Zoe's working directory.
+# Example: paths = ["example_plugin/ambient-example-plugin.exe"]
+# Build with: go -C brave_search_plugin build -o brave_search_plugin.exe .
+# Set the Brave API key in brave_search_plugin/config.toml (see its README).
+paths = ["brave_search_plugin/brave_search_plugin.exe"]
+call_timeout_seconds = 30

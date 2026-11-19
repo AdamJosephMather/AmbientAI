@@ -20,22 +20,22 @@ type AddWindowTool struct {
 }
 
 type DelWindowTool struct {
-	Tool  string `json:"tool"`
-	ID    int    `json:"id"`
+	Tool string `json:"tool"`
+	ID   int    `json:"id"`
 }
 
 type HighlightWindowTool struct {
-	Tool  string `json:"tool"`
-	ID    int    `json:"id"`
+	Tool string `json:"tool"`
+	ID   int    `json:"id"`
 }
 
 type ResizeWindowTool struct {
-	Tool  string `json:"tool"`
-	ID    int    `json:"id"`
-	X     int    `json:"x"`
-	Y     int    `json:"y"`
-	W     int    `json:"w"`
-	H     int    `json:"h"`
+	Tool string `json:"tool"`
+	ID   int    `json:"id"`
+	X    int    `json:"x"`
+	Y    int    `json:"y"`
+	W    int    `json:"w"`
+	H    int    `json:"h"`
 }
 
 type InvokeWorkerTool struct {
@@ -46,13 +46,28 @@ type SleepTool struct {
 	Tool string `json:"tool"`
 }
 
+// PluginToolCall preserves arbitrary plugin arguments and the flattened frontend format.
+type PluginToolCall struct {
+	Tool      string
+	Arguments json.RawMessage
+}
+
+func (t PluginToolCall) MarshalJSON() ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(t.Arguments, &fields); err != nil {
+		return nil, err
+	}
+	fields["tool"], _ = json.Marshal(t.Tool)
+	return json.Marshal(fields)
+}
+
 type ToolWrapper struct {
 	Value any // will hold one of the tools
 }
 
 type ModelResponse struct {
-	Speech    string        `json:"speech"`
-	Tools     []ToolWrapper `json:"tools"`
+	Speech string        `json:"speech"`
+	Tools  []ToolWrapper `json:"tools"`
 }
 
 // extracts tools with varying formats
@@ -85,29 +100,42 @@ func (t *ToolWrapper) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		t.Value = tool
-	
+
 	case "del_window":
 		var tool DelWindowTool
 		if err := json.Unmarshal(data, &tool); err != nil {
 			return err
 		}
 		t.Value = tool
-	
+
 	case "highlight_window":
 		var tool HighlightWindowTool
 		if err := json.Unmarshal(data, &tool); err != nil {
 			return err
 		}
 		t.Value = tool
-	
+
 	case "resize_window":
 		var tool ResizeWindowTool
 		if err := json.Unmarshal(data, &tool); err != nil {
 			return err
 		}
 		t.Value = tool
-	
+
 	default:
+		if plugins.HasFrontTool(header.Tool) {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(data, &fields); err != nil {
+				return err
+			}
+			delete(fields, "tool")
+			arguments, err := json.Marshal(fields)
+			if err != nil {
+				return err
+			}
+			t.Value = PluginToolCall{Tool: header.Tool, Arguments: arguments}
+			return nil
+		}
 		// Optional fallback for unknown/future tools so it doesn't crash
 		var generic map[string]any
 		if err := json.Unmarshal(data, &generic); err != nil {
@@ -119,8 +147,8 @@ func (t *ToolWrapper) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// without below we {"speech":"Trying it again now.","tools":[{"Value":{"tool":"sleep"}}]} 
-// instead of {"speech":"Trying it again now.","tools":[{"tool":"sleep"}]} 
+// without below we {"speech":"Trying it again now.","tools":[{"Value":{"tool":"sleep"}}]}
+// instead of {"speech":"Trying it again now.","tools":[{"tool":"sleep"}]}
 func (t ToolWrapper) MarshalJSON() ([]byte, error) {
 	return json.Marshal(t.Value)
 }
@@ -133,6 +161,6 @@ func parseModelResponse(content string) (ModelResponse, error) {
 	if err != nil {
 		return resp, err
 	}
-	
+
 	return resp, nil
 }

@@ -1,0 +1,8 @@
+# Copy to config.toml beside the plugin executable. BRAVE_SEARCH_API_KEY overrides this.
+api_key = ""
+# Keep shorter than Zoe's plugin call timeout (30 seconds by default).
+request_timeout_seconds = 20
+# Empty values use Brave's country/language defaults.
+country = ""
+search_lang = ""
+safesearch = "moderate"
