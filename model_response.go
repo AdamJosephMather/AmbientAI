@@ -47,6 +47,13 @@ type ResizeWindowTool struct {
 	H    int    `json:"h"`
 }
 
+type EditWindowTool struct {
+	Tool string `json:"tool"`
+	ID   int    `json:"id"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
+}
+
 type InvokeWorkerTool struct {
 	Tool string `json:"tool"`
 }
@@ -133,6 +140,13 @@ func (t *ToolWrapper) UnmarshalJSON(data []byte) error {
 
 	case "resize_window":
 		var tool ResizeWindowTool
+		if err := json.Unmarshal(data, &tool); err != nil {
+			return err
+		}
+		t.Value = tool
+		
+	case "edit_window":
+		var tool EditWindowTool
 		if err := json.Unmarshal(data, &tool); err != nil {
 			return err
 		}

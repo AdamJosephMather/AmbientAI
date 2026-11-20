@@ -310,6 +310,8 @@ func completeFrontResponse(ctx context.Context, history []openrouter.Message) {
 			highlightWindow(tool.ID)
 		case ResizeWindowTool:
 			resizeWindow(tool.ID, tool.X, tool.Y, tool.W, tool.H)
+		case EditWindowTool:
+			editWindow(tool.ID, tool.Title, tool.Body)
 		case InvokeWorkerTool:
 			fmt.Printf("Worker started. Messages in context %d", len(mainChatForWorkers))
 			result := strings.Join(mainChatForWorkers, "\n\n")
@@ -519,6 +521,16 @@ func resizeWindow(id, x, y, w, h int) {
 	}
 
 	highlightWindow(id)
+}
+
+func editWindow(id int, title, body string) {
+	err := game.UpdateWindow(id, title, body)
+	
+	if err != nil {
+		appendMessage(fmt.Sprintf("[From: system]\n\nWindow edit successful, ID: %d", id), "user")
+	} else {
+		appendMessage(fmt.Sprintf("[From: system]\n\nCould not find window ID: %d", id), "user")
+	}
 }
 
 func delWindow(id int) {
@@ -741,8 +753,10 @@ Your responses must contain only one valid JSON object, no Markdown fences nor r
 - Closes the window given by the ID returned by add_window
 {"tool":"highlight_window", "id":42}
 - Brings window with ID to the front
-{"tool":"resize_window", "id":42, x:240, y:120, w:400, h:400}
+{"tool":"resize_window", "id":42, "x":240, "y":120, "w":400, "h":400}
 - Moves/resizes window 'id' to new location and size and brings the window to front
+{"tool":"edit_window", "id":42, "title":"Window's New Title", "body":"**New** markdown content."}
+- Replaces the content with the new title and body.
 {"tool":"invoke_worker"}
 - Starts a background worker with access to conversation data up until the call point in the conversation.
 {"tool":"sleep"}
