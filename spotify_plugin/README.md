@@ -137,6 +137,29 @@ not instructions.
 - Pause, next, previous, and current-song lookup never launch Spotify. The
   controls use the reported current device and fail when none is usable.
 
+## Currently playing window
+
+The plugin registers `Spotify_currently_playing`. Ask the assistant to open a
+Spotify currently playing window, or use this frontend tool:
+
+```json
+{"tool":"add_plugin_window","window_type":"Spotify_currently_playing"}
+```
+
+The window shows the current song, artist names, and Playing/Paused state,
+including playback on other devices. It displays an empty state when no song
+is available. Opening the window never launches Spotify or changes playback.
+No additional configuration or authorization scopes are needed.
+
+Open windows refresh using `poll_interval_seconds` (5 seconds by default),
+even when `send_song_updates` is false. They share a single polling loop with
+optional song-change notifications. Only changed window content is sent;
+playback position is omitted. Closing the last window stops window polling;
+polling continues if song-change notifications are enabled. Multiple open
+windows show the same playback state. API failures display an error and mark
+any retained playback details as the last known state; successful refreshes
+clear that warning. Rate limits use the existing `Retry-After` handling.
+
 ## Optional song-change updates
 
 ```toml
@@ -163,7 +186,7 @@ Explicit tool calls use the same compact song fields plus `is_playing`.
 When no song is available, the message is `Spotify has no current song.` and
 `data` is null.
 
-The host decides whether to speak about an update. Notifications and tool replies
+The host decides whether to speak about an update. Notifications, window updates, and tool replies
 share a mutex so their NDJSON lines cannot interleave. API failures are ordinary
 JSON-RPC errors and keep the plugin running. Non-idempotent skip commands are
 not retried after timeouts; authentication failures can refresh and retry once.

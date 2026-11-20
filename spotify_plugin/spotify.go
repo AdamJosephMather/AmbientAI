@@ -463,29 +463,57 @@ func (s *spotify) call(ctx context.Context, name string, raw json.RawMessage) (a
 	}
 }
 
-// Polling establishes a baseline without announcing the startup state. Failed
-// polls never clear the last known song, avoiding false changes after outages.
-func (s *spotify) updates(ctx context.Context, send func(playback) error) {
-	interval := time.Duration(s.cfg.PollIntervalSeconds) * time.Second
+// Song notifications establish a silent baseline. Failed polls preserve identity.
+func songChanges(send func(playback) error) func(playback, error) error {
 	var previous string
 	initialized := false
+	return func(p playback, err error) error {
+		if err != nil {
+			return nil
+		}
+		key := ""
+		if p.Song != nil {
+			key = p.Song.URI
+			if key == "" {
+				data, _ := json.Marshal(p.Song)
+				key = string(data)
+			}
+		}
+		changed := initialized && key != previous
+		previous, initialized = key, true
+		if changed {
+			return send(p)
+		}
+		return nil
+	}
+}
+
+func (s *spotify) updates(ctx context.Context, send func(playback) error) {
+	s.pollPlayback(ctx, func() bool { return true }, nil, songChanges(send))
+}
+
+// Windows and optional song notifications share one poller. With neither active,
+// wait for a window to open without making background API requests.
+func (s *spotify) pollPlayback(ctx context.Context, active func() bool, wake <-chan struct{}, observe func(playback, error) error) {
+	interval := time.Duration(s.cfg.PollIntervalSeconds) * time.Second
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if !active() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-wake:
+				continue
+			}
+		}
 		p, err := s.current(ctx)
-		if err == nil {
-			key := ""
-			if p.Song != nil {
-				key = p.Song.URI
-				if key == "" {
-					data, _ := json.Marshal(p.Song)
-					key = string(data)
-				}
-			}
-			if initialized && key != previous {
-				if send(p) != nil {
-					return
-				}
-			}
-			previous, initialized = key, true
+		if ctx.Err() != nil {
+			return
+		}
+		if observe(p, err) != nil {
+			return
 		}
 		wait := interval
 		var rate *apiError
@@ -497,6 +525,8 @@ func (s *spotify) updates(ctx context.Context, send func(playback) error) {
 		case <-ctx.Done():
 			timer.Stop()
 			return
+		case <-wake:
+			timer.Stop()
 		case <-timer.C:
 		}
 	}

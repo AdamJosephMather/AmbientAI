@@ -46,7 +46,7 @@ func registration() json.RawMessage {
 		{"resume", "Resume Spotify on an already playing device; otherwise start only on this computer, launching Spotify and waiting if necessary. A successful response with is_playing null means Spotify accepted the command but confirmation is pending, not failure; do not automatically retry resume.", empty},
 		{"get_current_song", "Get only song_name, artist_names, and is_playing, including playback on other devices. Song name is null when nothing is available. Does not launch Spotify.", empty},
 	}
-	data, _ := json.Marshal(map[string]any{"name": "Spotify", "version": "1.0.0", "front_end_tools": tools, "back_end_tools": tools})
+	data, _ := json.Marshal(map[string]any{"name": "Spotify", "version": "1.0.0", "front_end_tools": tools, "back_end_tools": tools, "window_types": []map[string]string{{"name": "currently_playing", "description": "Show the current Spotify song, artists, and playing or paused state. Refreshes while open without launching Spotify or changing playback."}}})
 	return data
 }
 
@@ -120,30 +120,47 @@ func serve(in io.Reader, out io.Writer, s *spotify) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	var updates sync.WaitGroup
 	defer func() { cancel(); updates.Wait() }()
-	if s.cfg.SendSongUpdates {
-		updates.Add(1)
-		go func() {
-			defer updates.Done()
-			s.updates(ctx, func(p playback) error {
-				text := "Spotify current song changed."
-				var data any
-				if p.Song == nil {
-					text = "Spotify has no current song."
-				} else {
-					artists := make([]string, 0, len(p.Song.Artists))
-					for _, artist := range p.Song.Artists {
-						artists = append(artists, artist.Name)
-					}
-					data = map[string]any{"song_name": p.Song.Name, "artist_names": artists}
-				}
-				params, _ := json.Marshal(map[string]any{"message": text, "data": data})
-				return send(message{JSONRPC: "2.0", Method: "plugin/notify", Params: params})
-			})
-		}()
-	}
+	windows := newPlaybackWindows(send)
+	notify := songChanges(func(p playback) error {
+		text := "Spotify current song changed."
+		var data any
+		if p.Song == nil {
+			text = "Spotify has no current song."
+		} else {
+			artists := make([]string, 0, len(p.Song.Artists))
+			for _, artist := range p.Song.Artists {
+				artists = append(artists, artist.Name)
+			}
+			data = map[string]any{"song_name": p.Song.Name, "artist_names": artists}
+		}
+		params, _ := json.Marshal(map[string]any{"message": text, "data": data})
+		return send(message{JSONRPC: "2.0", Method: "plugin/notify", Params: params})
+	})
+	updates.Add(1)
+	go func() {
+		defer updates.Done()
+		s.pollPlayback(ctx, func() bool { return s.cfg.SendSongUpdates || windows.active() }, windows.wake, func(p playback, err error) error {
+			if sendErr := windows.update(p, err); sendErr != nil {
+				return sendErr
+			}
+			if s.cfg.SendSongUpdates {
+				return notify(p, err)
+			}
+			return nil
+		})
+	}()
 	for scanner.Scan() {
 		var request message
-		if json.Unmarshal(scanner.Bytes(), &request) != nil || request.JSONRPC != "2.0" || len(request.ID) == 0 {
+		if json.Unmarshal(scanner.Bytes(), &request) != nil || request.JSONRPC != "2.0" {
+			return fmt.Errorf("invalid host JSON-RPC request")
+		}
+		if request.Method == "windows/created" || request.Method == "windows/deleted" {
+			if err := windows.lifecycle(request); err != nil {
+				return err
+			}
+			continue
+		}
+		if len(request.ID) == 0 {
 			return fmt.Errorf("invalid host JSON-RPC request")
 		}
 		response := message{JSONRPC: "2.0", ID: request.ID}
