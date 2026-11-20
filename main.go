@@ -527,9 +527,9 @@ func editWindow(id int, title, body string) {
 	err := game.UpdateWindow(id, title, body)
 	
 	if err != nil {
-		appendMessage(fmt.Sprintf("[From: system]\n\nWindow edit successful, ID: %d", id), "user")
-	} else {
 		appendMessage(fmt.Sprintf("[From: system]\n\nCould not find window ID: %d", id), "user")
+	} else {
+		appendMessage(fmt.Sprintf("[From: system]\n\nWindow edit successful, ID: %d", id), "user")
 	}
 }
 
