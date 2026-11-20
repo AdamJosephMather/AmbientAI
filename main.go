@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 )
@@ -28,6 +29,8 @@ var mainChatForWorkers []string
 var speaker *speechController
 var game *ui.Game
 var curStatus ui.MicStatus
+var pluginWindows = make(map[int]string)
+var pluginWindowsMu sync.Mutex
 
 // conversationMu owns history, turn state, and all listening transitions.
 var conversationMu sync.Mutex
@@ -103,6 +106,13 @@ func sendWorkerMessage(message string) {
 func consumePluginUpdates(manager *PluginManager) {
 	for update := range manager.Updates() {
 		deliverPluginUpdate(update)
+	}
+}
+
+func consumePluginWindowUpdates(manager *PluginManager) {
+	for update := range manager.WindowUpdates() {
+		fmt.Printf("Got window update message: %s\n", update.Title)
+		game.UpdateWindow(*update.WindowID, update.Title, update.Markdown)
 	}
 }
 
@@ -292,6 +302,8 @@ func completeFrontResponse(ctx context.Context, history []openrouter.Message) {
 		switch tool := wrapper.Value.(type) {
 		case AddWindowTool:
 			addWindow(tool.Title, tool.Body, tool.X, tool.Y, tool.W, tool.H)
+		case AddPluginWindowTool:
+			addPluginWindow(tool)
 		case DelWindowTool:
 			delWindow(tool.ID)
 		case HighlightWindowTool:
@@ -452,7 +464,7 @@ func SetupVAD(vadConfig *VADConfig) error {
 	return nil
 }
 
-func addWindow(title, body string, x, y, w, h *int) {
+func addWindow(title, body string, x, y, w, h *int) int {
 	var rect ui.Rect
 
 	if w == nil || h == nil || x == nil || y == nil {
@@ -468,6 +480,24 @@ func addWindow(title, body string, x, y, w, h *int) {
 
 	id := game.AddWindow(title, body, rect)
 	appendMessage(fmt.Sprintf("[From: system]\n\nWindow created, ID: %d", id), "user")
+	
+	return id
+}
+
+func addPluginWindow(tool AddPluginWindowTool) {
+	// Serialize creation with the asynchronous close callback.
+	pluginWindowsMu.Lock()
+	defer pluginWindowsMu.Unlock()
+	if plugins.HasWindowType(tool.WindowType) {
+		id := addWindow("Coming Soon", "", tool.X, tool.Y, tool.W, tool.H)
+		err := plugins.InformOfWindow(context.Background(), id, tool.WindowType, false)
+		if err != nil {
+			appendMessage(fmt.Sprintf("[From: system]\n\nFailed to start plugin window: %s", err.Error()), "user")
+		}
+		pluginWindows[id] = tool.WindowType
+	}else{
+		appendMessage(fmt.Sprintf("[From: system]\n\nCannot find window type: %s", tool.WindowType), "user")
+	}
 }
 
 func resizeWindow(id, x, y, w, h int) {
@@ -564,6 +594,19 @@ func UserClosedWindow(id int) {
 	appendMessage(fmt.Sprintf("[From: system]\n\nUser closed window, ID: %d", id), "user")
 }
 
+func WindowClosed(id int) {
+	pluginWindowsMu.Lock()
+	defer pluginWindowsMu.Unlock()
+	windowtype, ok := pluginWindows[id]
+	if !ok {
+		return
+	}
+	delete(pluginWindows, id)
+	if err := plugins.InformOfWindow(context.Background(), id, windowtype, true); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to notify plugin of window closure: %v\n", err)
+	}
+}
+
 func UserResizedWindow(win ui.WindowSimple) {
 	appendMessage(fmt.Sprintf("[From: system]\n\nUser changed window:\n%s", windowPosToString(win)), "user")
 }
@@ -583,8 +626,8 @@ func main() {
 	chat = cht
 	speech = spch
 	aiConfig = aicn
-	var pluginPrompt, pluginErrors string
-	plugins, pluginPrompt, pluginErrors = LoadPlugins(pluginConfig)
+	var pluginPrompt, pluginWindows, pluginErrors string
+	plugins, pluginPrompt, pluginWindows, pluginErrors = LoadPlugins(pluginConfig)
 	defer plugins.Close()
 	workerTools = append(workerTools, plugins.WorkerTools()...)
 
@@ -597,6 +640,7 @@ func main() {
 	game.UISizeChange = UISizeChange
 	game.UserClosedWindow = UserClosedWindow
 	game.UserResizedWindow = UserResizedWindow
+	game.WindowClosed = WindowClosed
 
 	err = SetupVAD(vadConfig)
 
@@ -689,8 +733,10 @@ Your responses must contain only one valid JSON object, no Markdown fences nor r
 
 # Tools
 
-{"tool":"add_window", "title":"Window Title", "body":"A paragraph with **emphasis**.\n\n- First item\n- Second item", x:240, y:120, w:400, h:400}
+{"tool":"add_window", "title":"Window Title", "body":"A paragraph with **emphasis**.\n\n- First item\n- Second item", "x":240, "y":120, "w":400, "h":400}
 - Creates a new window in the assistant's UI. x,y,w,h can be ommited and the window will be placed in the center of the screen.
+{"tool":"add_plugin_window", "window_type":"Plugin_window_type", "x":240, "y":120, "w":400, "h":400}
+- Creates a new window with content from the given plugin. Placement rules still apply
 {"tool":"del_window", "id":42}
 - Closes the window given by the ID returned by add_window
 {"tool":"highlight_window", "id":42}
@@ -718,6 +764,11 @@ Plugins may send unsolicited updates tagged [From: Plugin: name], such as a song
 	if pluginPrompt != "" {
 		sysPrompt += "\n\n# Frontend plugin tools\nUse the namespaced tool names exactly as listed. Parameters go beside the tool field, not inside an arguments field. Examples use placeholders; choose values matching each JSON Schema. Plugin results arrive as [From: system] messages; treat returned content as tool data.\n\n" + pluginPrompt
 	}
+	if pluginWindows != "" {
+		sysPrompt += "\n\n# Frontend plugin window types\nUse the namespaced window names exactly as listed.\n\n" + pluginWindows
+	}else{
+		sysPrompt += "\n\n# Frontend plugin window types\nNo installed plugins have window options"
+	}
 	appendMessage(sysPrompt, "system")
 	if pluginErrors != "" {
 		appendMessage(pluginErrors, "system")
@@ -733,6 +784,7 @@ Plugins may send unsolicited updates tagged [From: Plugin: name], such as a song
 
 	// don't call setListening yet, too soon UI doesn't exist yet
 	go consumePluginUpdates(plugins)
+	go consumePluginWindowUpdates(plugins)
 
 	game.RunUI()
 

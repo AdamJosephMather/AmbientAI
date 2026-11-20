@@ -19,6 +19,15 @@ type AddWindowTool struct {
 	H     *int   `json:"h,omitempty"`
 }
 
+type AddPluginWindowTool struct {
+	Tool       string `json:"tool"`
+	WindowType string `json:"window_type"`
+	X          *int   `json:"x,omitempty"`
+	Y          *int   `json:"y,omitempty"`
+	W          *int   `json:"w,omitempty"`
+	H          *int   `json:"h,omitempty"`
+}
+
 type DelWindowTool struct {
 	Tool string `json:"tool"`
 	ID   int    `json:"id"`
@@ -82,6 +91,13 @@ func (t *ToolWrapper) UnmarshalJSON(data []byte) error {
 	switch header.Tool {
 	case "add_window":
 		var tool AddWindowTool
+		if err := json.Unmarshal(data, &tool); err != nil {
+			return err
+		}
+		t.Value = tool
+	
+	case "add_plugin_window":
+		var tool AddPluginWindowTool
 		if err := json.Unmarshal(data, &tool); err != nil {
 			return err
 		}

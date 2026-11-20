@@ -1,7 +1,7 @@
 # Example plugin and protocol
 
-This standalone Go project provides test functions only. It makes no API calls
-and has no external dependencies. Build from the repository root:
+This standalone Go project provides test tools and a test window type only. It
+makes no API calls and has no external dependencies. Build from the repository root:
 
 ```powershell
 go -C example_plugin build -o example_plugin.exe .
@@ -31,6 +31,9 @@ The example exposes:
 | Worker | `Test_wait` | `{"seconds":0}` | `{"finished":true}` |
 | Worker | `Test_fail` | `{}` | Intentional JSON-RPC error |
 
+It also registers one window type, `Test_test_window`, which shows a counter
+that increments every 2 seconds (see [Plugin windows](#plugin-windows)).
+
 `Test_wait` accepts up to 120 seconds; use a value above your configured timeout
 to test failure handling. A timed-out plugin is stopped and remains unavailable
 until the assistant restarts. Other plugins keep running.
@@ -41,7 +44,9 @@ Each stdin/stdout message is a single UTF-8 JSON object followed by a newline
 (NDJSON). Do not pretty-print across multiple lines. Incoming plugin messages
 must be smaller than 1 MiB. Write diagnostics to stderr; stdout is reserved for
 the protocol. JSON-RPC batches and plugin-initiated requests after registration
-are not supported. Unsolicited `plugin/notify` notifications are supported.
+are not supported. Two unsolicited plugin-to-host notifications are supported:
+`plugin/notify` and `plugin/updatewindow`. After registration, any other message
+carrying a `method` stops the plugin.
 
 Immediately after launch, the plugin must send a JSON-RPC 2.0 request with method
 `plugin/register` within **5 seconds**. Its ID may be a string or number. The
@@ -67,12 +72,15 @@ following is formatted for readability; send it on one line:
         }
       }
     ],
-    "back_end_tools": []
+    "back_end_tools": [],
+    "window_types": [
+      {"name": "test_window", "description": "A window for testing purposes"}
+    ]
   }
 }
 ```
 
-the assistant acknowledges accepted registration with the same ID:
+`window_types` is optional. the assistant acknowledges accepted registration with the same ID:
 
 ```json
 {"jsonrpc":"2.0","id":"register","result":{"registered":true}}
@@ -91,6 +99,9 @@ plugin must validate arguments and enforce its own constraints when called.
 Frontend schemas cannot declare a parameter named `tool`, which is reserved for
 dispatch. All tools need a nonempty description.
 
+Each window type needs a name using the same character set as tool names and a
+nonempty description.
+
 ## Names and model formats
 
 Every model-facing tool is named `<plugin namespace>_<tool name>`, such as
@@ -101,8 +112,17 @@ Combined names cannot exceed 64 characters.
 
 Duplicate namespaces and tool-name collisions are checked without regard to
 case, including names that normalize to the same namespace or collide with
-built-in tools. A collision rejects the entire later plugin. A plugin may expose
+built-in tools. The reserved built-in names are `add_window`,
+`add_plugin_window`, `del_window`, `highlight_window`, `resize_window`,
+`invoke_worker`, `sleep`, and `inject_context`. A collision rejects the entire later plugin. A plugin may expose
 the same tool name to both frontend and backend; these have separate registries.
+
+Window types are named `<plugin namespace>_<window name>` by the same rules
+(for example `Test_test_window`, 64 characters maximum) and have their own
+registry, checked case-insensitively across all plugins. A window type never
+collides with a tool name, but a duplicate or oversized window type name rejects
+the entire plugin just as a tool collision does. The frontend is given the list
+of registered window types with their descriptions.
 
 The frontend receives flattened examples plus tool descriptions and complete
 parameter schemas in its system prompt. For example:
@@ -151,6 +171,77 @@ tag and copied into worker context. A follow-up is requested when speech,
 transcription, inference, and playback permit it. Workers wait for each response
 and receive results/errors as the corresponding standard tool message before
 their next inference.
+
+## Plugin windows
+
+A plugin that registers `window_types` can own windows of those types. The host
+creates and deletes windows; the plugin keeps their contents current.
+
+### Lifecycle messages (host to plugin)
+
+When a window of a plugin's type is created or deleted, the host sends
+`windows/created` or `windows/deleted` as a notification (no `id`).
+`window_type` is the original unprefixed name from registration, as with `name`
+in `tools/call`:
+
+```json
+{"jsonrpc":"2.0","method":"windows/created","params":{"window_id":7,"window_type":"test_window"}}
+{"jsonrpc":"2.0","method":"windows/deleted","params":{"window_id":7,"window_type":"test_window"}}
+```
+
+There is nothing to respond to; do not send a reply. A message with an `id` and
+no `method` is treated as a tool response and, if it does not match the pending
+call, stops the plugin.
+
+A plugin should start tracking a window on `windows/created` and discard its
+state on `windows/deleted`. Window IDs are assigned by the host and are not
+scoped per plugin.
+
+Lifecycle messages do not wait for the plugin's call queue, so a running
+`tools/call` does not delay them. They are written to stdin immediately, but a
+plugin that reads stdin sequentially (like the example) only sees them once its
+current call returns. Writes to the plugin's stdin are serialized, so lines never
+interleave, but a lifecycle message may arrive between a `tools/call` request and
+its response. If the write cannot complete within `call_timeout_seconds`, the
+plugin is stopped.
+
+### Updating a window (plugin to host)
+
+A plugin sets a window's title and content with a `plugin/updatewindow`
+notification (no `id`):
+
+```json
+{"jsonrpc":"2.0","method":"plugin/updatewindow","params":{"window_id":7,"title":"Window: 7","markdown":"Count: 3"}}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `window_id` | integer | Required. ID received in `windows/created`. Omitting it stops the plugin. |
+| `title` | string | Window title. |
+| `markdown` | string | Window content, as Markdown. |
+
+Send the full title and content on every update; the example does. The host adds
+the registered plugin name, and payloads cannot set it.
+
+Updates are not acknowledged. They use a separate 128-event queue from
+`plugin/notify`; if a burst fills it, additional updates are dropped with a
+stderr diagnostic. Because each update replaces the whole window, a dropped
+update only matters if it was the last one, so send state on change rather than
+on a fast timer. A notification that is malformed (cannot be decoded, or carries
+an `id`, `result`, or `error`) stops the plugin.
+
+The host records which window IDs it has announced to each plugin. An update for
+a `window_id` that was never announced to that plugin, or whose window has been
+deleted, is silently dropped and does not stop the plugin, so a plugin cannot
+update another plugin's windows and a late update after `windows/deleted` is
+harmless. Stop sending updates for a window after `windows/deleted`.
+
+### Example behavior
+
+On `windows/created` for `test_window`, the example plugin starts a counter for
+that window ID at 0. Every 2 seconds it sends one `plugin/updatewindow` per open
+window with title `Window: <id>` and markdown `Count: <n>`, then increments the
+counter. On `windows/deleted` it removes the window.
 
 ## Unsolicited updates
 

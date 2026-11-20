@@ -103,7 +103,7 @@ func loadHelper(t *testing.T, mode string, count int) (*PluginManager, string, s
 	for i := range paths {
 		paths[i] = exe
 	}
-	m, prompt, failures := LoadPlugins(&PluginConfig{Paths: paths, CallTimeoutSeconds: 1})
+	m, prompt, _, failures := LoadPlugins(&PluginConfig{Paths: paths, CallTimeoutSeconds: 1})
 	t.Cleanup(m.Close)
 	return m, prompt, failures
 }
@@ -171,7 +171,7 @@ func TestPluginRegistrationFailures(t *testing.T) {
 		}
 	})
 	t.Run("missing-executable", func(t *testing.T) {
-		m, _, failures := LoadPlugins(&PluginConfig{Paths: []string{"missing-test-plugin.exe"}})
+		m, _, _, failures := LoadPlugins(&PluginConfig{Paths: []string{"missing-test-plugin.exe"}})
 		defer m.Close()
 		if !strings.Contains(failures, "Inform the user") {
 			t.Fatal("missing actionable load error")
@@ -267,7 +267,7 @@ func TestExamplePlugin(t *testing.T) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build example: %v\n%s", err, output)
 	}
-	m, _, failures := LoadPlugins(&PluginConfig{Paths: []string{path}})
+	m, _, _, failures := LoadPlugins(&PluginConfig{Paths: []string{path}})
 	defer m.Close()
 	if failures != "" {
 		t.Fatal(failures)
@@ -289,6 +289,27 @@ func TestExamplePlugin(t *testing.T) {
 		if err != nil || result != tc.want {
 			t.Fatalf("%s: got %s, %v", tc.name, result, err)
 		}
+	}
+	if err := m.InformOfWindow(context.Background(), 42, "Test_test_window", false); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case update := <-m.WindowUpdates():
+		if update.WindowID == nil || *update.WindowID != 42 || update.Title != "Window: 42" || update.Markdown != "Count: 0" {
+			t.Fatalf("unexpected window update: %+v", update)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("example plugin sent no window update")
+	}
+	if err := m.InformOfWindow(context.Background(), 42, "Test_test_window", true); err != nil {
+		t.Fatal(err)
+	}
+	p := m.windowtypes["Test_test_window"].process
+	p.owndWindowsMu.Lock()
+	owned := p.ownedWindows[42]
+	p.owndWindowsMu.Unlock()
+	if owned {
+		t.Fatal("deleted window remains owned by plugin")
 	}
 	if _, err := m.Call(context.Background(), "back_end", "Test_fail", json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "Intentional test failure") {
 		t.Fatalf("missing test error: %v", err)
@@ -379,7 +400,7 @@ func TestBravePluginRegistrationAndMissingKey(t *testing.T) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build Brave plugin: %v\n%s", err, output)
 	}
-	m, prompt, failures := LoadPlugins(&PluginConfig{Paths: []string{path}})
+	m, prompt, _, failures := LoadPlugins(&PluginConfig{Paths: []string{path}})
 	defer m.Close()
 	if failures != "" || prompt != "" || len(m.WorkerTools()) != 1 || m.WorkerTools()[0].Function.Name != "Brave_search" {
 		t.Fatalf("incorrect Brave registration: %s", failures)

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -175,6 +176,9 @@ type Game struct {
 	minWinWidth, minWinHeight float32
 	stripSize, textHeight float32
 	
+	// windowsMu protects windows, their IDs, and workspace dimensions.
+	// Methods called with it held use private helpers to avoid recursive locking.
+	windowsMu sync.Mutex
 	windows []Window
 	buttonToWindow map[int]int
 	
@@ -186,6 +190,7 @@ type Game struct {
 	UISizeChange func(width int, height int, newWindows []WindowSimple)
 	UserResizedWindow func(newWin WindowSimple)
 	UserClosedWindow func(id int)
+	WindowClosed func(id int)
 	sleepButton Button
 	
 	costMu sync.Mutex
@@ -235,6 +240,12 @@ func CoordIn(x, y float32, rect Rect) bool {
 }
 
 func (g *Game) PullItUp(id int) bool {
+	g.windowsMu.Lock()
+	defer g.windowsMu.Unlock()
+	return g.pullItUp(id)
+}
+
+func (g *Game) pullItUp(id int) bool {
 	swapping := false
 	
 	for i, w := range(g.windows) {
@@ -249,6 +260,12 @@ func (g *Game) PullItUp(id int) bool {
 }
 
 func (g *Game) FindWindow(id int) int {
+	g.windowsMu.Lock()
+	defer g.windowsMu.Unlock()
+	return g.findWindow(id)
+}
+
+func (g *Game) findWindow(id int) int {
 	for i, w := range(g.windows) {
 		if w.id == id {
 			return i
@@ -258,17 +275,33 @@ func (g *Game) FindWindow(id int) int {
 }
 
 func (g *Game) CloseWindow(id int) bool {
-	i := g.FindWindow(id)
+	g.windowsMu.Lock()
+	defer g.windowsMu.Unlock()
+	return g.closeWindow(id)
+}
+
+func (g *Game) closeWindow(id int) bool {
+	i := g.findWindow(id)
 	
 	if i != -1 {
 		g.windows = append(g.windows[:i], g.windows[i+1:]...) // removes the window
+		
+		if g.WindowClosed != nil {
+			go g.WindowClosed(id)
+		}
 		return true
 	}
 	return false
 }
 
 func (g *Game) MoveWindowBy(dX, dY float32, id int) bool {
-	i := g.FindWindow(id)
+	g.windowsMu.Lock()
+	defer g.windowsMu.Unlock()
+	return g.moveWindowBy(dX, dY, id)
+}
+
+func (g *Game) moveWindowBy(dX, dY float32, id int) bool {
+	i := g.findWindow(id)
 	
 	if i != -1 {
 		g.windows[i].rect.X += dX
@@ -279,7 +312,13 @@ func (g *Game) MoveWindowBy(dX, dY float32, id int) bool {
 }
 
 func (g *Game) MoveWindowTo(id int, rect Rect) bool {
-	i := g.FindWindow(id)
+	g.windowsMu.Lock()
+	defer g.windowsMu.Unlock()
+	return g.moveWindowTo(id, rect)
+}
+
+func (g *Game) moveWindowTo(id int, rect Rect) bool {
+	i := g.findWindow(id)
 	
 	if i != -1 {
 		g.windows[i].rect = rect
@@ -299,7 +338,13 @@ func (r *Rect) EnsureMinSize(minW, minH float32) {
 }
 
 func (g *Game) DragWindowEdgeBy(dX, dY float32, id int, edge Border) {
-	i := g.FindWindow(id)
+	g.windowsMu.Lock()
+	defer g.windowsMu.Unlock()
+	g.dragWindowEdgeBy(dX, dY, id, edge)
+}
+
+func (g *Game) dragWindowEdgeBy(dX, dY float32, id int, edge Border) {
+	i := g.findWindow(id)
 	
 	if i == -1 {
 		return
@@ -324,15 +369,22 @@ func (g *Game) DragWindowEdgeBy(dX, dY float32, id int, edge Border) {
 }
 
 func (g *Game) DoButton(id int) {
+	g.windowsMu.Lock()
+	defer g.windowsMu.Unlock()
+	g.doButton(id)
+}
+
+func (g *Game) doButton(id int) {
 	if id == g.sleepButton.id && g.SleepDone != nil {
-		g.SleepDone()
+		// The callback may acquire conversationMu; do not wait while holding windowsMu.
+		go g.SleepDone()
 		return
 	}
 	
 	wId, exists := g.buttonToWindow[id]
 	
 	if exists {
-		g.CloseWindow(wId)
+		g.closeWindow(wId)
 		if g.UserClosedWindow != nil {
 			go g.UserClosedWindow(id)
 		}
@@ -341,6 +393,8 @@ func (g *Game) DoButton(id int) {
 }
 
 func (g *Game) Update() error {
+	g.windowsMu.Lock()
+	defer g.windowsMu.Unlock()
 	// calculate positioning
 	if g.setup && (g.oldwidth != g.width || g.oldheight != g.height) { // if not setup, initial width might have been 0 (leading to inf)
 		floatOldWidth := float32(g.oldwidth)
@@ -375,21 +429,21 @@ func (g *Game) Update() error {
 			
 			switch iType {
 			case InteractableTitleBar, InteractableWindow, InteractableWindowEdge:
-				g.PullItUp(id)
+				g.pullItUp(id)
 			case InteractableButton:
 				val, exists := g.buttonToWindow[id]
 				if exists {
-					g.PullItUp(val)
+					g.pullItUp(val)
 				}
 			}
 		}
 	}else if inpututil.IsMouseButtonJustReleased(ebiten.MouseButtonLeft) {
 		if (g.interaction.interactiontype == InteractionPress) {
 			if (g.interaction.interactabletype == InteractableButton && CoordIn(mX, mY, g.interaction.hitArea)) {
-				g.DoButton(g.interaction.id)
+				g.doButton(g.interaction.id)
 			}else if (g.interaction.interactabletype == InteractableTitleBar || g.interaction.interactabletype == InteractableWindowEdge) {
 				if g.UserResizedWindow != nil {
-					w_idx := g.FindWindow(g.interaction.id)
+					w_idx := g.findWindow(g.interaction.id)
 					if w_idx != -1 {
 						g.UserResizedWindow(WindowSimple{
 							ID: g.windows[w_idx].id,
@@ -406,9 +460,9 @@ func (g *Game) Update() error {
 		if g.interaction.interactiontype == InteractionPress {
 			switch g.interaction.interactabletype {
 			case InteractableTitleBar:
-				g.MoveWindowBy(dMX, dMY, g.interaction.id)
+				g.moveWindowBy(dMX, dMY, g.interaction.id)
 			case InteractableWindowEdge:
-				g.DragWindowEdgeBy(dMX, dMY, g.interaction.id, g.interaction.border)
+				g.dragWindowEdgeBy(dMX, dMY, g.interaction.id, g.interaction.border)
 			}
 		}
 	}
@@ -497,7 +551,7 @@ func (g *Game) Update() error {
 	_, yoff := ebiten.Wheel()
 	
 	if g.interaction.interactabletype == InteractableWindow && g.interaction.interactiontype == InteractionHover {
-		wIdx := g.FindWindow(g.interaction.id)
+		wIdx := g.findWindow(g.interaction.id)
 		if wIdx != -1 {
 			w := &g.windows[wIdx]
 			if overflow := w.scrollOverflow(g.stripSize); overflow > 0 {
@@ -785,6 +839,8 @@ func (g *Game) DrawWorkers(screen *ebiten.Image) {
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
+	g.windowsMu.Lock()
+	defer g.windowsMu.Unlock()
 	fullRect := Rect{0, 0, float32(g.width), float32(g.height)}
 	g.DrawBackground(screen, fullRect, g.stripSize/2, g.rectWidth, g.theme.background, g.theme.backgroundLines)
 	g.DrawMicLines(screen)
@@ -806,6 +862,8 @@ func (g *Game) Draw(screen *ebiten.Image) {
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
+	g.windowsMu.Lock()
+	defer g.windowsMu.Unlock()
 	s := ebiten.Monitor().DeviceScaleFactor()
 	g.width = int(float64(outsideWidth) * s)
 	g.height = int(float64(outsideHeight) * s)
@@ -851,14 +909,22 @@ func (g *Game) SetupAnim() {
 }
 
 func (g *Game) GetNewId() int {
+	g.windowsMu.Lock()
+	defer g.windowsMu.Unlock()
+	return g.getNewId()
+}
+
+func (g *Game) getNewId() int {
 	g.lastId += 1
 	return g.lastId
 }
 
 func (g *Game) AddWindow(title, body string, rect Rect) int {
+	g.windowsMu.Lock()
+	defer g.windowsMu.Unlock()
 	var win Window
-	win.id = g.GetNewId()
-	win.closeButton.id = g.GetNewId()
+	win.id = g.getNewId()
+	win.closeButton.id = g.getNewId()
 	win.closeButton.graphic = GraphicClose
 	win.closeButton.background = g.theme.transparent
 	win.closeButton.backgroundHover = g.theme.buttonHovering
@@ -871,7 +937,25 @@ func (g *Game) AddWindow(title, body string, rect Rect) int {
 	return win.id
 }
 
+func (g *Game) UpdateWindow(id int, title, body string) error {
+	g.windowsMu.Lock()
+	defer g.windowsMu.Unlock()
+	winIdx := g.findWindow(id)
+	
+	if winIdx == -1 {
+		return errors.New("Can't find window corresponding to id")
+	}
+	
+	g.windows[winIdx].title = title
+	g.windows[winIdx].body = body
+	g.windows[winIdx].oldwidth = -1 // forces a recalc on the text within the window
+	
+	return nil
+}
+
 func (g *Game) ChooseRect() Rect {
+	g.windowsMu.Lock()
+	defer g.windowsMu.Unlock()
 	var r Rect
 	r.W = 300
 	r.H = 300
