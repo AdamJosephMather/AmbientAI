@@ -284,6 +284,3 @@ optional `data` contains a sequence number. Disable events by unsetting it:
 ```powershell
 Remove-Item Env:EXAMPLE_PLUGIN_UPDATE_INTERVAL
 ```
-
-Run the host integration tests from the repository root with `go test ./...`.
-They also build and exercise this nested example project over actual stdio.
