@@ -116,7 +116,7 @@ func (t *Transcriber) Transcribe(
 		return "", Usage{}, errors.New("no audio samples")
 	}
 
-	wav, err := EncodeWAV(samples, 16000)
+	wav, err := EncodeWAV(normalizeTranscriptionAudio(samples), 16000)
 	if err != nil {
 		return "", Usage{}, fmt.Errorf("encode wav: %w", err)
 	}

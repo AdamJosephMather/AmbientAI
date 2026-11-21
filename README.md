@@ -106,6 +106,17 @@ pure-Go replacement for malgo. Capture remains mono signed 16-bit PCM at
 16 kHz, assembled into 512-sample frames for Silero VAD. A fallback to the
 library's silent null backend is treated as an initialization error.
 
+Completed utterances are normalized before STT upload to target -20 dBFS RMS,
+with a maximum 10x gain and a 0.89 peak limit. Near-silent audio is not boosted.
+Silero continues to receive the original capture levels. Normalization can help
+with quiet recordings, but does not improve the speech-to-noise ratio.
+
+Conversation messages carry local 24-hour timestamps (`[From: sender | HH:mm]`).
+The system prompt includes the local date and timezone, refreshed on each request.
+Date metadata sits at the end of the prompt to preserve its static cache prefix;
+message timestamps are assigned once and retained in history.
+
+
 Capture backends and limitations:
 
 - Windows amd64/arm64: WASAPI shared mode handles sample rate and channel conversion.

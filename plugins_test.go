@@ -382,7 +382,7 @@ func TestPluginUpdateContextWhileSleeping(t *testing.T) {
 	if !sleeping || !workerPending || frontTurns.active() {
 		t.Fatal("notification woke or interrupted the assistant")
 	}
-	if len(mainChat) != 1 || !strings.Contains(mainChat[0].Content, "[From: Plugin: Spotify]") || !strings.Contains(mainChat[0].Content, `{"track":"test"}`) || len(mainChatForWorkers) != 1 {
+	if len(mainChat) != 1 || !strings.Contains(mainChat[0].Content, "[From: Plugin: Spotify | ") || !strings.Contains(mainChat[0].Content, `{"track":"test"}`) || len(mainChatForWorkers) != 1 {
 		t.Fatalf("notification missing from conversation: %+v", mainChat)
 	}
 }
