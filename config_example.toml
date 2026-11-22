@@ -58,3 +58,14 @@ model_smart_reasoning = "medium"
 
 paths = ["brave_search_plugin/brave_search_plugin.exe"]
 call_timeout_seconds = 30
+
+[database]
+
+# Append-only database holding the main chat history (messages, program
+# starts, compactions). Worker chats are not kept.
+# The path is relative to the program's working directory.
+path = "conversation.db"
+
+# How many hours after the last message should the history be compacted
+# (merged lossy-style) when the program starts.
+compact_after_hours = 3

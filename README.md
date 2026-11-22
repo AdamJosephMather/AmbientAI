@@ -14,6 +14,32 @@ pause/resume, skip controls, and current-song lookup to both models, with option
 song-change updates. Each user supplies their own Spotify developer app and
 authorizes their Premium account; setup and device selection are documented there.
 
+## Conversation history
+
+The main chat is kept in an append-only SQLite database (`conversation.db` by
+default) in the working directory. The program does not use worker chats for
+history; only the main conversation — messages (user/assistant/system),
+program starts, and compactions — is stored. Every entry carries the unix
+timestamp, message content, and role. The very first system prompt is loaded
+as context only and is never written to the database.
+
+`[database]` in `config.toml` controls the behavior:
+
+- `path` — database file path relative to the working directory
+  (default `conversation.db`).
+- `compact_after_hours` — how many hours after the last message should the
+  history be compacted at program start (default `3`).
+
+On startup the program first verifies that it is the only running instance
+(an OS-level lock on `ambientai.lock`), records a program start event, and
+then reads the history. If the last message is older than
+`compact_after_hours`, it folds the last compaction together with all new
+messages into a new compaction using the configured smart model and stores
+the new `compaction` event. The message list given to the assistant and
+workers is the latest compaction plus all messages after it. Failures to
+compact fall back to the un-compacted history. Worker chats are never
+stored.
+
 ## TTS audio formats
 
 Playback reads the audio format from each TTS response instead of assuming a

@@ -27,6 +27,17 @@ var player *audio.Player
 var mainChat []openrouter.Message
 var mainChatForWorkers []string
 
+// eventDB is the append-only conversation database. It is opened during
+// startup before any messages are recorded; startup failure aborts instead.
+var eventDB *ConversationDB
+
+// loadedHistory and loadedWorkerHistory hold the compaction plus the
+// messages after it (if any) recovered from eventDB at startup. They are
+// installed into mainChat and mainChatForWorkers when the system prompt
+// is built.
+var loadedHistory []openrouter.Message
+var loadedWorkerHistory []string
+
 var speaker *speechController
 var game *ui.Game
 var curStatus ui.MicStatus
@@ -54,16 +65,23 @@ const (
 func appendMessage(message string, role string) {
 	var newMessage openrouter.Message
 
-	newMessage.Content = timestampMessage(message, role, time.Now())
+	at := time.Now()
+	newMessage.Content = timestampMessage(message, role, at)
 	newMessage.Role = role
 	if role == "system" {
-		newMessage.Content = datedSystemPrompt(message, time.Now())
+		newMessage.Content = datedSystemPrompt(message, at)
 	}
 
 	mainChat = append(mainChat, newMessage)
 
 	if role == "user" {
 		println(message)
+	}
+
+	if eventDB != nil {
+		if err := eventDB.InsertMessage(at, role, newMessage.Content); err != nil {
+			fmt.Printf("Could not store message in the conversation database: %v\n", err)
+		}
 	}
 }
 
@@ -287,8 +305,15 @@ func completeFrontResponse(ctx context.Context, history []openrouter.Message) {
 
 	// get clean json to put back
 	canonical, _ := json.Marshal(mdlJson)
-	aiMsg.Content = formatMessage(aiConfig.AIName, string(canonical), time.Now())
+	at := time.Now()
+	aiMsg.Content = formatMessage(aiConfig.AIName, string(canonical), at)
 	mainChat = append(mainChat, aiMsg)
+
+	if eventDB != nil {
+		if err := eventDB.InsertMessage(at, "assistant", aiMsg.Content); err != nil {
+			fmt.Printf("Could not store assistant message in the conversation database: %v\n", err)
+		}
+	}
 
 	if strings.TrimSpace(mdlJson.Speech) != "" {
 		println(mdlJson.Speech)
@@ -632,9 +657,24 @@ func UserResizedWindow(win ui.WindowSimple) {
 
 func main() {
 	println("Starting...")
+
+	// Only one instance of the program may run at a time. This uses an
+	// OS-level lock on a lock file, released by the OS automatically when
+	// the process dies — a crash cannot leave a stale flag behind.
+	release, err := lockInstance(instanceLockPath)
+	if err != nil {
+		if errors.Is(err, errAnotherInstance) {
+			fmt.Fprintln(os.Stderr, "Another instance of the program is already running. Exiting.")
+		} else {
+			fmt.Printf("Could not acquire single-instance lock: %v\n", err)
+		}
+		return
+	}
+	defer release()
+
 	sleepctl.SetCanSleep(false)
 
-	vadConfig, trscribe, cht, spch, aicn, pluginConfig, uiConfig, err := ReadConfig("config.toml")
+	vadConfig, trscribe, cht, spch, aicn, pluginConfig, uiConfig, databaseConfig, err := ReadConfig("config.toml")
 
 	if err != nil {
 		fmt.Printf("Config load error: %s\n", err.Error())
@@ -645,6 +685,29 @@ func main() {
 	chat = cht
 	speech = spch
 	aiConfig = aicn
+
+	// Append-only conversation database. Opening it and recording the
+	// program start event are fatal: without them the program cannot
+	// reconstruct the conversation.
+	eventDB, err = OpenConversationDB(databaseConfig.Path)
+	if err != nil {
+		fmt.Println("Database error:", err.Error())
+		return
+	}
+	defer eventDB.Close()
+
+	now := time.Now()
+	if err := eventDB.InsertProgramStart(now); err != nil {
+		fmt.Println("Could not record program start in the conversation database:", err.Error())
+		return
+	}
+
+	loadedHistory, loadedWorkerHistory, err = prepareHistory(now, databaseConfig.CompactAfterHours)
+	if err != nil {
+		fmt.Println("Could not restore conversation history:", err.Error())
+		return
+	}
+
 	var pluginPrompt, pluginWindows, pluginErrors string
 	plugins, pluginPrompt, pluginWindows, pluginErrors = LoadPlugins(pluginConfig)
 	defer plugins.Close()
@@ -793,7 +856,14 @@ Plugins may send unsolicited updates tagged [From: Plugin: name], such as a song
 	} else {
 		sysPrompt += "\n\n# Frontend plugin window types\nNo installed plugins have window options"
 	}
-	appendMessage(sysPrompt, "system")
+	// The very first system prompt is loaded as context only: it is not
+	// recorded in the append-only conversation database.
+	mainChat = make([]openrouter.Message, 0, len(loadedHistory)+1)
+	mainChat = append(mainChat, openrouter.Message{Role: "system", Content: datedSystemPrompt(sysPrompt, time.Now())})
+	mainChat = append(mainChat, loadedHistory...)
+	mainChatForWorkers = make([]string, len(loadedWorkerHistory))
+	copy(mainChatForWorkers, loadedWorkerHistory)
+
 	if pluginErrors != "" {
 		appendMessage(pluginErrors, "system")
 		appendMessageToWorker(pluginErrors, "system")
