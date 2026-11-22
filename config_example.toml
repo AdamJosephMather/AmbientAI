@@ -69,3 +69,4 @@ path = "conversation.db"
 # How many hours after the last message should the history be compacted
 # (merged lossy-style) when the program starts.
 compact_after_hours = 3
+max_compaction_tokens = 16384

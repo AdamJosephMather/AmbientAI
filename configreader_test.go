@@ -36,6 +36,7 @@ user_name = "boss"
 [database]
 path = "custom.db"
 compact_after_hours = 5
+max_compaction_tokens = 16384
 `
 
 func writeConfig(t *testing.T, body string) string {
