@@ -59,7 +59,7 @@ func shouldCompact(last *Event, now time.Time, afterHours int) bool {
 
 // compactHistory summarizes the prior compaction together with the messages
 // after it into a single lossy summary. It uses the configured smart model.
-func compactHistory(ctx context.Context, priorCompaction string, tail []Event) (string, error) {
+func compactHistory(ctx context.Context, priorCompaction string, tail []Event, maxCompactTokens int) (string, error) {
 	var b strings.Builder
 	b.WriteString("You are the compactor of an ambient assistant's conversation history.\n\n")
 	b.WriteString("Summarize everything below into a single compact summary. The summary replaces the messages it was derived from in the assistant's context, so anything the assistant needs to continue the conversation must survive it.\n\n")
@@ -85,7 +85,7 @@ func compactHistory(ctx context.Context, priorCompaction string, tail []Event) (
 
 	msg, _, err := chat.CompleteMessage(ctx, []openrouter.Message{
 		{Role: "user", Content: b.String()},
-	}, aiConfig.ModelSmart, aiConfig.ModelSmartReasoning, openrouter.CompletionOptions{MaxTokens: 4096})
+	}, aiConfig.ModelSmart, aiConfig.ModelSmartReasoning, openrouter.CompletionOptions{MaxTokens: maxCompactTokens})
 	if err != nil {
 		return "", fmt.Errorf("compact history: %w", err)
 	}
@@ -101,7 +101,7 @@ func compactionMessageContent(content string, at time.Time) string {
 // prepareHistory restores the conversation after a restart: it reads all
 // events from the database, compacts the history if the last message is
 // stale, and returns the resulting assistant and worker context.
-func prepareHistory(now time.Time, compactAfterHours int) ([]openrouter.Message, []string, error) {
+func prepareHistory(now time.Time, compactAfterHours, maxCompactTokens int) ([]openrouter.Message, []string, error) {
 	events, err := eventDB.Events()
 	if err != nil {
 		return nil, nil, fmt.Errorf("read conversation history: %w", err)
@@ -115,7 +115,10 @@ func prepareHistory(now time.Time, compactAfterHours int) ([]openrouter.Message,
 		if compaction != nil {
 			prior = compaction.Content
 		}
-		summary, err := compactFn(prior, tail)
+		
+		println("Compacting...")
+		
+		summary, err := compactFn(prior, tail, maxCompactTokens)
 		if err != nil {
 			// Fall back to the un-compacted history.
 			fmt.Printf("Conversation compaction failed: %v\n", err)
@@ -126,7 +129,7 @@ func prepareHistory(now time.Time, compactAfterHours int) ([]openrouter.Message,
 				// Fall back to the un-compacted history.
 				fmt.Printf("Could not store compaction in the conversation database: %v\n", err)
 			} else {
-				compaction = &Event{Time: now, Type: EventCompaction, Role: "system", Content: summary}
+				compaction = &Event{Time: now, Type: EventCompaction, Role: "user", Content: summary}
 				tail = nil
 			}
 		}
@@ -136,7 +139,7 @@ func prepareHistory(now time.Time, compactAfterHours int) ([]openrouter.Message,
 	workerContext := make([]string, 0, len(tail)+1)
 	if compaction != nil {
 		content := compactionMessageContent(compaction.Content, compaction.Time)
-		assistantContext = append(assistantContext, openrouter.Message{Role: "system", Content: content})
+		assistantContext = append(assistantContext, openrouter.Message{Role: "user", Content: content})
 		workerContext = append(workerContext, content)
 	}
 	for _, ev := range tail {
@@ -148,6 +151,6 @@ func prepareHistory(now time.Time, compactAfterHours int) ([]openrouter.Message,
 
 // compactFn is the function used to summarize prior compaction + tail.
 // It is a variable so tests can substitute a stub.
-var compactFn = func(prior string, tail []Event) (string, error) {
-	return compactHistory(context.Background(), prior, tail)
+var compactFn = func(prior string, tail []Event, maxCompactTokens int) (string, error) {
+	return compactHistory(context.Background(), prior, tail, maxCompactTokens)
 }

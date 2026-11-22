@@ -655,6 +655,14 @@ func UserResizedWindow(win ui.WindowSimple) {
 	appendMessage(fmt.Sprintf("[From: system]\n\nUser changed window:\n%s", windowPosToString(win)), "user")
 }
 
+func printHistory() { // for debug purposes
+	for _,m := range(mainChat[1:]) {
+		println(m.Role)
+		println(m.Content)
+		println()
+	}
+}
+
 func main() {
 	println("Starting...")
 
@@ -702,7 +710,7 @@ func main() {
 		return
 	}
 
-	loadedHistory, loadedWorkerHistory, err = prepareHistory(now, databaseConfig.CompactAfterHours)
+	loadedHistory, loadedWorkerHistory, err = prepareHistory(now, databaseConfig.CompactAfterHours, databaseConfig.MaxCompactTokens)
 	if err != nil {
 		fmt.Println("Could not restore conversation history:", err.Error())
 		return

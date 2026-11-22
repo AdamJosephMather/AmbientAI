@@ -69,7 +69,7 @@ func (d *ConversationDB) Insert(ts time.Time, typ, role, content string) error {
 }
 
 func (d *ConversationDB) InsertProgramStart(at time.Time) error {
-	return d.Insert(at, EventProgramStart, "system", "")
+	return d.Insert(at, EventProgramStart, "user", "")
 }
 
 func (d *ConversationDB) InsertMessage(at time.Time, role, content string) error {
@@ -77,7 +77,7 @@ func (d *ConversationDB) InsertMessage(at time.Time, role, content string) error
 }
 
 func (d *ConversationDB) InsertCompaction(at time.Time, content string) error {
-	return d.Insert(at, EventCompaction, "system", content)
+	return d.Insert(at, EventCompaction, "user", content)
 }
 
 // Events returns every event in append order.

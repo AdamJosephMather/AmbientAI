@@ -27,6 +27,7 @@ type AIConfig struct {
 type DatabaseConfig struct {
 	Path              string `toml:"path"`
 	CompactAfterHours int    `toml:"compact_after_hours"`
+	MaxCompactTokens  int    `toml:"max_compaction_tokens"`
 }
 
 type Config struct {
@@ -82,6 +83,9 @@ func ReadConfig(configPath string) (*VADConfig, *openrouter.Transcriber, *openro
 	}
 	if config.Database.CompactAfterHours <= 0 {
 		config.Database.CompactAfterHours = 3
+	}
+	if config.Database.MaxCompactTokens <= 1024 {
+		config.Database.MaxCompactTokens = 1024
 	}
 
 	return &config.Vad, &openrouter.Transcriber{
