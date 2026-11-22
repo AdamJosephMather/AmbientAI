@@ -66,7 +66,6 @@ call_timeout_seconds = 30
 # The path is relative to the program's working directory.
 path = "conversation.db"
 
-# How many hours after the last message should the history be compacted
-# (merged lossy-style) when the program starts.
+# Compactions occur on program start if the last message was sent more than this number of hours ago (Minimum 1)
 compact_after_hours = 3
 max_compaction_tokens = 16384
