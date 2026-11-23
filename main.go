@@ -133,7 +133,6 @@ func consumePluginUpdates(manager *PluginManager) {
 
 func consumePluginWindowUpdates(manager *PluginManager) {
 	for update := range manager.WindowUpdates() {
-		fmt.Printf("Got window update message: %s\n", update.Title)
 		game.UpdateWindow(*update.WindowID, update.Title, update.Markdown)
 	}
 }
