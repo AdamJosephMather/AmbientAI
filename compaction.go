@@ -85,9 +85,10 @@ func compactionPrompt(priorCompaction string, tail []Event, aiName string) strin
 	b.WriteString("- Preserve the user's goals, ongoing tasks, pending asks, and expectations.\n")
 	b.WriteString("- Preserve important facts, decisions, preferences, results, and anything the assistant promised or found that still matters.\n")
 	b.WriteString("- Greetings, small talk, routine state chatter, and redundant details may be dropped.\n")
+	b.WriteString("- Drop window/workspace events, windows do not survive compaction.\n")
 	b.WriteString("- No dialogue formatting; write an objective account of what happened.\n")
 	b.WriteString("- Do not invent information that is not present.\n")
-	b.WriteString("- Output only the summary: no preamble, no labels, no Markdown fences. Aim for under ~200 words.")
+	b.WriteString("- Output only the summary: no preamble, no labels, no Markdown fences.")
 
 	return b.String()
 }
