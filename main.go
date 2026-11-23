@@ -303,10 +303,11 @@ func completeFrontResponse(ctx context.Context, history []openrouter.Message) {
 		return
 	}
 
-	// get clean json to put back
+	// get clean json to put back: the model's output is stored raw, without
+	// a [From: ...] envelope. Only the worker's copy carries one.
 	canonical, _ := json.Marshal(mdlJson)
 	at := time.Now()
-	aiMsg.Content = formatMessage(aiConfig.AIName, string(canonical), at)
+	aiMsg.Content = string(canonical)
 	mainChat = append(mainChat, aiMsg)
 
 	if eventDB != nil {
@@ -710,7 +711,7 @@ func main() {
 		return
 	}
 
-	loadedHistory, loadedWorkerHistory, err = prepareHistory(now, databaseConfig.CompactAfterHours, databaseConfig.MaxCompactTokens)
+	loadedHistory, loadedWorkerHistory, err = prepareHistory(now, databaseConfig.CompactAfterHours, databaseConfig.MaxCompactTokens, aiConfig.AIName)
 	if err != nil {
 		fmt.Println("Could not restore conversation history:", err.Error())
 		return
@@ -812,7 +813,7 @@ When no response or tool is justified, return exactly:
 Speech and tools are independent: a justified tool call can still use speech:null when a spoken announcement would add nothing. When you do speak, keep it brief and useful.
 
 # Message timing
-Conversation messages include a [From: sender | HH:mm] header in local 24-hour time. These headers are context metadata. Produce only the JSON response described below, without a header.
+User messages include a [From: sender | HH:mm] header in local 24-hour time. These headers are context metadata. Produce only the JSON response described below, without a header.
 
 # Output Format
 Your responses must contain only one valid JSON object, no Markdown fences nor regular text around the JSON. Escape line breaks inside strings as \n, tabs as \t, double quotes as \" and backslashes as \\. Never put literal line breaks inside a quoted string. Formatting whitespace outside strings is allowed. Use these fields (speech is a string or null):

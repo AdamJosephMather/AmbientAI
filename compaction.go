@@ -57,9 +57,10 @@ func shouldCompact(last *Event, now time.Time, afterHours int) bool {
 	return now.Unix()-last.Time.Unix() > int64(afterHours)*3600
 }
 
-// compactHistory summarizes the prior compaction together with the messages
-// after it into a single lossy summary. It uses the configured smart model.
-func compactHistory(ctx context.Context, priorCompaction string, tail []Event, maxCompactTokens int) (string, error) {
+// compactionPrompt builds the compaction model's input. Assistant (Zoe's)
+// turns are wrapped in a [From: aiName | HH:mm] envelope, like every other
+// non-user turn. aiName is the name used in the envelope.
+func compactionPrompt(priorCompaction string, tail []Event, aiName string) string {
 	var b strings.Builder
 	b.WriteString("You are the compactor of an ambient assistant's conversation history.\n\n")
 	b.WriteString("Summarize everything below into a single compact summary. The summary replaces the messages it was derived from in the assistant's context, so anything the assistant needs to continue the conversation must survive it.\n\n")
@@ -72,7 +73,12 @@ func compactHistory(ctx context.Context, priorCompaction string, tail []Event, m
 
 	b.WriteString("Messages to fold in:\n")
 	for _, ev := range tail {
-		fmt.Fprintf(&b, "---\n[%s] %s\n", ev.Time.Local().Format("2006-01-02 15:04"), ev.Content)
+		content := ev.Content
+		if ev.Role == "assistant" {
+			_, body := parseFromTag(ev.Content)
+			content = formatMessage(aiName, body, ev.Time.Local())
+		}
+		fmt.Fprintf(&b, "---\n[%s] %s\n", ev.Time.Local().Format("2006-01-02 15:04"), content)
 	}
 
 	b.WriteString("\nRules:\n")
@@ -83,8 +89,14 @@ func compactHistory(ctx context.Context, priorCompaction string, tail []Event, m
 	b.WriteString("- Do not invent information that is not present.\n")
 	b.WriteString("- Output only the summary: no preamble, no labels, no Markdown fences. Aim for under ~200 words.")
 
+	return b.String()
+}
+
+// compactHistory summarizes the prior compaction together with the messages
+// after it into a single lossy summary. It uses the configured smart model.
+func compactHistory(ctx context.Context, priorCompaction string, tail []Event, maxCompactTokens int, aiName string) (string, error) {
 	msg, _, err := chat.CompleteMessage(ctx, []openrouter.Message{
-		{Role: "user", Content: b.String()},
+		{Role: "user", Content: compactionPrompt(priorCompaction, tail, aiName)},
 	}, aiConfig.ModelSmart, aiConfig.ModelSmartReasoning, openrouter.CompletionOptions{MaxTokens: maxCompactTokens})
 	if err != nil {
 		return "", fmt.Errorf("compact history: %w", err)
@@ -100,8 +112,10 @@ func compactionMessageContent(content string, at time.Time) string {
 
 // prepareHistory restores the conversation after a restart: it reads all
 // events from the database, compacts the history if the last message is
-// stale, and returns the resulting assistant and worker context.
-func prepareHistory(now time.Time, compactAfterHours, maxCompactTokens int) ([]openrouter.Message, []string, error) {
+// stale, and returns the resulting assistant and worker context. aiName is
+// the name used in the [From: aiName | HH:mm] envelope on the worker's copy
+// of assistant messages.
+func prepareHistory(now time.Time, compactAfterHours, maxCompactTokens int, aiName string) ([]openrouter.Message, []string, error) {
 	events, err := eventDB.Events()
 	if err != nil {
 		return nil, nil, fmt.Errorf("read conversation history: %w", err)
@@ -118,7 +132,7 @@ func prepareHistory(now time.Time, compactAfterHours, maxCompactTokens int) ([]o
 		
 		println("Compacting...")
 		
-		summary, err := compactFn(prior, tail, maxCompactTokens)
+		summary, err := compactFn(prior, tail, maxCompactTokens, aiName)
 		if err != nil {
 			// Fall back to the un-compacted history.
 			fmt.Printf("Conversation compaction failed: %v\n", err)
@@ -143,6 +157,14 @@ func prepareHistory(now time.Time, compactAfterHours, maxCompactTokens int) ([]o
 		workerContext = append(workerContext, content)
 	}
 	for _, ev := range tail {
+		if ev.Role == "assistant" {
+			// Assistant output is JSON and is kept raw for the main model.
+			// Only the worker's copy carries the [From: aiName | HH:mm] envelope.
+			_, body := parseFromTag(ev.Content)
+			assistantContext = append(assistantContext, openrouter.Message{Role: ev.Role, Content: body})
+			workerContext = append(workerContext, formatMessage(aiName, body, ev.Time.Local()))
+			continue
+		}
 		assistantContext = append(assistantContext, openrouter.Message{Role: ev.Role, Content: ev.Content})
 		workerContext = append(workerContext, ev.Content)
 	}
@@ -151,6 +173,6 @@ func prepareHistory(now time.Time, compactAfterHours, maxCompactTokens int) ([]o
 
 // compactFn is the function used to summarize prior compaction + tail.
 // It is a variable so tests can substitute a stub.
-var compactFn = func(prior string, tail []Event, maxCompactTokens int) (string, error) {
-	return compactHistory(context.Background(), prior, tail, maxCompactTokens)
+var compactFn = func(prior string, tail []Event, maxCompactTokens int, aiName string) (string, error) {
+	return compactHistory(context.Background(), prior, tail, maxCompactTokens, aiName)
 }

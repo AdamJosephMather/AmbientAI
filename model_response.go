@@ -184,10 +184,12 @@ func (t ToolWrapper) MarshalJSON() ([]byte, error) {
 }
 
 func parseModelResponse(content string) (ModelResponse, error) {
-	jsonData := []byte(content)
+	// The model must never emit a [From: ...] envelope before its JSON.
+	// Strip a stray tag defensively so the payload still parses.
+	_, body := parseFromTag(content)
 
 	var resp ModelResponse
-	err := json.Unmarshal(jsonData, &resp)
+	err := json.Unmarshal([]byte(body), &resp)
 	if err != nil {
 		return resp, err
 	}

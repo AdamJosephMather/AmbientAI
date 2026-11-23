@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -65,7 +66,7 @@ func TestReadConfigDatabaseSection(t *testing.T) {
 
 func TestReadConfigDatabaseDefaults(t *testing.T) {
 	body := minimalValidConfig
-	body = body[:len(body)-len("\n[database]\npath = \"custom.db\"\ncompact_after_hours = 5\n")]
+	body = body[:strings.Index(body, "[database]")]
 	path := writeConfig(t, body)
 
 	_, _, _, _, _, _, _, databaseConfig, err := ReadConfig(path)
@@ -83,7 +84,7 @@ func TestReadConfigDatabaseDefaults(t *testing.T) {
 func TestReadConfigDatabaseSectionInvalid(t *testing.T) {
 	// Zero or negative compact_after_hours falls back to the default.
 	body := minimalValidConfig
-	body = body[:len(body)-len("compact_after_hours = 5\n")] + "compact_after_hours = 0\n"
+	body = strings.Replace(minimalValidConfig, "compact_after_hours = 5", "compact_after_hours = 0", 1)
 	path := writeConfig(t, body)
 
 	_, _, _, _, _, _, _, databaseConfig, err := ReadConfig(path)

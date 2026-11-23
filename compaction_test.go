@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"AmbientAI/openrouter"
 )
 
 var errCompactionStub = errors.New("stub compaction failure")
@@ -128,7 +127,7 @@ func TestPrepareHistoryFreshConversation(t *testing.T) {
 	must(t, db.InsertMessage(at.Add(time.Minute), "user", "hello"))
 	must(t, db.InsertMessage(at.Add(2*time.Minute), "assistant", "hi there"))
 
-	assistantContext, workerContext, err := prepareHistory(at.Add(3*time.Minute), 3)
+	assistantContext, workerContext, err := prepareHistory(at.Add(3*time.Minute), 3, 200, "Zoe")
 	if err != nil {
 		t.Fatalf("prepareHistory: %v", err)
 	}
@@ -143,8 +142,11 @@ func TestPrepareHistoryFreshConversation(t *testing.T) {
 	if assistantContext[1].Role != "assistant" || assistantContext[1].Content != "hi there" {
 		t.Errorf("context[1] = %+v", assistantContext[1])
 	}
-	if len(workerContext) != 2 || workerContext[0] != "hello" || workerContext[1] != "hi there" {
+	if len(workerContext) != 2 || workerContext[0] != "hello" {
 		t.Errorf("worker context = %v", workerContext)
+	}
+	if !strings.HasPrefix(workerContext[1], "[From: Zoe | ") || !strings.HasSuffix(workerContext[1], "hi there") {
+		t.Errorf("assistant copy missing [From: Zoe | ...] envelope: %v", workerContext)
 	}
 
 	events, err := db.Events()
@@ -175,7 +177,7 @@ func TestPrepareHistoryCompactsStaleHistory(t *testing.T) {
 	priorCompaction := ""
 	var gotTail []Event
 	originalCompactFn := compactFn
-	compactFn = func(prior string, tail []Event) (string, error) {
+	compactFn = func(prior string, tail []Event, maxCompactTokens int, aiName string) (string, error) {
 		priorCompaction = prior
 		gotTail = make([]Event, len(tail))
 		copy(gotTail, tail)
@@ -183,7 +185,7 @@ func TestPrepareHistoryCompactsStaleHistory(t *testing.T) {
 	}
 	t.Cleanup(func() { compactFn = originalCompactFn })
 
-	assistantContext, workerContext, err := prepareHistory(time.Now(), 3)
+	assistantContext, workerContext, err := prepareHistory(time.Now(), 3, 200, "Zoe")
 	if err != nil {
 		t.Fatalf("prepareHistory: %v", err)
 	}
@@ -200,7 +202,7 @@ func TestPrepareHistoryCompactsStaleHistory(t *testing.T) {
 		t.Fatalf("expected 1 context message, got %d: %+v", len(assistantContext), assistantContext)
 	}
 	c := assistantContext[0]
-	if c.Role != "system" || !strings.Contains(c.Content, "new summary") {
+	if c.Role != "user" || !strings.Contains(c.Content, "new summary") {
 		t.Errorf("context[0] = %+v", c)
 	}
 	if !strings.Contains(c.Content, "[Compaction |") {
@@ -244,7 +246,7 @@ func TestPrepareHistoryCompactsWithExistingCompaction(t *testing.T) {
 	originalCompactFn := compactFn
 	var gotPrior string
 	var gotTail []Event
-	compactFn = func(prior string, tail []Event) (string, error) {
+	compactFn = func(prior string, tail []Event, maxCompactTokens int, aiName string) (string, error) {
 		gotPrior = prior
 		gotTail = make([]Event, len(tail))
 		copy(gotTail, tail)
@@ -253,7 +255,7 @@ func TestPrepareHistoryCompactsWithExistingCompaction(t *testing.T) {
 	t.Cleanup(func() { compactFn = originalCompactFn })
 
 	now := time.Now().Add(3*time.Hour + time.Minute) // more than X hours after the last message
-	assistantContext, workerContext, err := prepareHistory(now, 3)
+	assistantContext, workerContext, err := prepareHistory(now, 3, 200, "Zoe")
 	if err != nil {
 		t.Fatalf("prepareHistory: %v", err)
 	}
@@ -288,12 +290,12 @@ func TestPrepareHistoryCompactionFailureFallsBackToUncompacted(t *testing.T) {
 	must(t, db.InsertMessage(old, "user", "old question"))
 
 	originalCompactFn := compactFn
-	compactFn = func(prior string, tail []Event) (string, error) {
+	compactFn = func(prior string, tail []Event, maxCompactTokens int, aiName string) (string, error) {
 		return "", errCompactionStub
 	}
 	t.Cleanup(func() { compactFn = originalCompactFn })
 
-	assistantContext, workerContext, err := prepareHistory(time.Now(), 3)
+	assistantContext, workerContext, err := prepareHistory(time.Now(), 3, 200, "Zoe")
 	if err != nil {
 		t.Fatalf("prepareHistory: %v", err)
 	}
@@ -330,13 +332,13 @@ func TestPrepareHistorySkipsCompactionWhenFresh(t *testing.T) {
 
 	calls := 0
 	originalCompactFn := compactFn
-	compactFn = func(prior string, tail []Event) (string, error) {
+	compactFn = func(prior string, tail []Event, maxCompactTokens int, aiName string) (string, error) {
 		calls++
 		return "would not be used", nil
 	}
 	t.Cleanup(func() { compactFn = originalCompactFn })
 
-	assistantContext, _, err := prepareHistory(at.Add(30*time.Minute), 3)
+	assistantContext, _, err := prepareHistory(at.Add(30*time.Minute), 3, 200, "Zoe")
 	if err != nil {
 		t.Fatalf("prepareHistory: %v", err)
 	}
@@ -362,18 +364,82 @@ func TestWorkerContextMessagesMatchAssistant(t *testing.T) {
 	must(t, db.InsertMessage(at, "user", "user1"))
 	must(t, db.InsertMessage(at.Add(time.Minute), "assistant", "ai1"))
 
-	assistantContext, workerContext, err := prepareHistory(at.Add(2*time.Minute), 3)
+	assistantContext, workerContext, err := prepareHistory(at.Add(2*time.Minute), 3, 200, "Zoe")
 	if err != nil {
 		t.Fatalf("prepareHistory: %v", err)
 	}
 	if len(assistantContext) != len(workerContext) {
 		t.Fatalf("context sizes differ: %d vs %d", len(assistantContext), len(workerContext))
 	}
-	for i := range assistantContext {
-		want := openrouter.Message{Role: assistantContext[i].Role, Content: workerContext[i]}
-		if assistantContext[i].Content != want.Content {
-			t.Errorf("message %d: assistant %q vs worker %q", i, assistantContext[i].Content, workerContext[i])
-		}
+	// User messages pass through unchanged.
+	if assistantContext[0].Content != workerContext[0] {
+		t.Errorf("user message: assistant %q vs worker %q", assistantContext[0].Content, workerContext[0])
+	}
+	// Assistant output stays raw for the main model; the worker copy carries the envelope.
+	if assistantContext[1].Content != "ai1" {
+		t.Errorf("assistant context = %q, want raw ai1", assistantContext[1].Content)
+	}
+	if !strings.HasPrefix(workerContext[1], "[From: Zoe | ") || !strings.HasSuffix(workerContext[1], "ai1") {
+		t.Errorf("worker context = %q, want envelope-tagged ai1", workerContext[1])
+	}
+}
+
+func TestPrepareHistoryStripsLegacyAssistantTag(t *testing.T) {
+	// Rows stored before assistant messages stopped carrying the envelope
+	// must not re-inject it into the main context.
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := OpenConversationDB(path)
+	if err != nil {
+		t.Fatalf("OpenConversationDB: %v", err)
+	}
+	defer db.Close()
+	eventDB = db
+	t.Cleanup(func() { eventDB = nil })
+
+	at := time.Now()
+	must(t, db.InsertMessage(at, "assistant", `[From: Zoe | 10:02]
+
+{"speech":"hi","tools":[]}`))
+
+	assistantContext, workerContext, err := prepareHistory(at.Add(time.Minute), 3, 200, "Zoe")
+	if err != nil {
+		t.Fatalf("prepareHistory: %v", err)
+	}
+	if len(assistantContext) != 1 || assistantContext[0].Content != `{"speech":"hi","tools":[]}` {
+		t.Errorf("assistant context = %+v, want raw JSON", assistantContext)
+	}
+	if len(workerContext) != 1 || !strings.HasPrefix(workerContext[0], "[From: Zoe | ") || !strings.HasSuffix(workerContext[0], `{"speech":"hi","tools":[]}`) {
+		t.Errorf("worker context = %v, want envelope-tagged JSON", workerContext)
+	}
+}
+
+
+func TestCompactionPromptTagsAssistantTurns(t *testing.T) {
+	at := time.Now()
+	tail := []Event{
+		{Time: at, Type: EventMessage, Role: "user", Content: "[From: STT | 10:01]\n\nhello"},
+		{Time: at.Add(time.Minute), Type: EventMessage, Role: "assistant", Content: `{"speech":"hi","tools":[]}`},
+		{Time: at.Add(2 * time.Minute), Type: EventMessage, Role: "assistant", Content: "[From: Zoe | 10:02]\n\n{\"speech\":\"bye\",\"tools\":[]}"},
+	}
+	prompt := compactionPrompt("", tail, "Zoe")
+
+	// The raw JSON of both assistant turns reaches the compaction model, wrapped in the envelope.
+	if !strings.Contains(prompt, `{"speech":"hi","tools":[]}`) {
+		t.Errorf("prompt missing assistant JSON: %s", prompt)
+	}
+	if !strings.Contains(prompt, `{"speech":"bye","tools":[]}`) {
+		t.Errorf("prompt missing assistant JSON: %s", prompt)
+	}
+	if got := strings.Count(prompt, "[From: Zoe | "); got != 2 {
+		t.Errorf("expected 2 Zoe envelopes, got %d: %s", got, prompt)
+	}
+	// The stale timestamp from a legacy envelope is dropped, not re-injected.
+	if strings.Contains(prompt, "| 10:02]") {
+		t.Errorf("prompt contains stale timestamp: %s", prompt)
+	}
+	// Non-assistant turns are passed through unchanged.
+	if !strings.Contains(prompt, "[From: STT | 10:01]\n\nhello") {
+		t.Errorf("prompt missing user message: %s", prompt)
 	}
 }
 

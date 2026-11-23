@@ -11,12 +11,29 @@ func formatMessage(sender, message string, at time.Time) string {
 	return fmt.Sprintf("[From: %s | %s]\n\n%s", sender, at.Format("15:04"), message)
 }
 
+// parseFromTag extracts the sender and body from an existing
+// "[From: sender | HH:mm]\n\n" envelope. It returns an empty sender and the
+// original message when there is no valid envelope.
+func parseFromTag(message string) (sender, body string) {
+	if !strings.HasPrefix(message, "[From: ") {
+		return "", message
+	}
+	end := strings.Index(message, "]\n\n")
+	if end < 0 {
+		return "", message
+	}
+	sender = message[len("[From: "):end]
+	// A stored envelope may carry a stale timestamp suffix; drop it.
+	if idx := strings.LastIndex(sender, " | "); idx >= 0 {
+		sender = sender[:idx]
+	}
+	return sender, message[end+3:]
+}
+
 // Existing event producers supply their sender in an envelope.
 func timestampMessage(message, sender string, at time.Time) string {
-	if strings.HasPrefix(message, "[From: ") {
-		if end := strings.Index(message, "]\n\n"); end >= 0 {
-			sender, message = message[len("[From: "):end], message[end+3:]
-		}
+	if parsed, body := parseFromTag(message); parsed != "" {
+		sender, message = parsed, body
 	}
 	return formatMessage(sender, message, at)
 }

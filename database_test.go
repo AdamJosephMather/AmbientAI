@@ -26,7 +26,7 @@ func TestInsertAndEvents(t *testing.T) {
 	if err := db.InsertMessage(at.Add(time.Minute), "user", "[From: STT | 10:01]\n\nhello"); err != nil {
 		t.Fatalf("InsertMessage: %v", err)
 	}
-	if err := db.InsertMessage(at.Add(2*time.Minute), "assistant", "[From: Zoe | 10:02]\n\nhi"); err != nil {
+	if err := db.InsertMessage(at.Add(2*time.Minute), "assistant", "hi"); err != nil {
 		t.Fatalf("InsertMessage: %v", err)
 	}
 	if err := db.InsertCompaction(at.Add(3*time.Minute), "summary text"); err != nil {
@@ -50,7 +50,7 @@ func TestInsertAndEvents(t *testing.T) {
 	if events[2].Type != EventMessage || events[2].Role != "assistant" {
 		t.Errorf("event 2 = %+v", events[2])
 	}
-	if events[3].Type != EventCompaction || events[3].Role != "system" || events[3].Content != "summary text" {
+	if events[3].Type != EventCompaction || events[3].Role != "user" || events[3].Content != "summary text" {
 		t.Errorf("event 3 = %+v", events[3])
 	}
 
