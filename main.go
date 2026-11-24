@@ -59,7 +59,7 @@ const (
 	StatusListening               // 1
 	StatusThinking                // 2
 	StatusSpeaking                // 3
-	StatusSleeping                // 3
+	StatusSleeping                // 4
 )
 
 func appendMessage(message string, role string) {
