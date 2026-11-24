@@ -62,8 +62,8 @@ func shouldCompact(last *Event, now time.Time, afterHours int) bool {
 // non-user turn. aiName is the name used in the envelope.
 func compactionPrompt(priorCompaction string, tail []Event, aiName string) string {
 	var b strings.Builder
-	b.WriteString("You are the compactor of an ambient assistant's conversation history.\n\n")
-	b.WriteString("Summarize everything below into a single compact summary. The summary replaces the messages it was derived from in the assistant's context, so anything the assistant needs to continue the conversation must survive it.\n\n")
+	b.WriteString("You are the memory keeper of an ambient assistant. The conversation below has gone idle for several hours, so you are writing its record, not preparing to continue it.\n\n")
+	b.WriteString("Condense the messages below into a short summary of what was discussed, what was decided, and what needs to be remembered. The summary replaces the original messages in the assistant's context. Later, the assistant will read it to recall what happened, not to pick up mid-exchange, so exact wording and the back-and-forth do not need to survive.\n\n")
 
 	if strings.TrimSpace(priorCompaction) != "" {
 		b.WriteString("Previous summary:\n")
@@ -82,12 +82,16 @@ func compactionPrompt(priorCompaction string, tail []Event, aiName string) strin
 	}
 
 	b.WriteString("\nRules:\n")
-	b.WriteString("- Preserve the user's goals, ongoing tasks, pending asks, and expectations.\n")
-	b.WriteString("- Preserve important facts, decisions, preferences, results, and anything the assistant promised or found that still matters.\n")
-	b.WriteString("- Greetings, small talk, routine state chatter, and redundant details may be dropped.\n")
+	b.WriteString("- Record the topics discussed and the outcome of each, in a sentence or two. Do not reproduce the specifics of individual messages.\n")
+	b.WriteString("- Preserve decisions made, preferences and facts the user revealed, and anything the assistant promised or found that still matters.\n")
+	b.WriteString("- Preserve open items: tasks still in progress, pending asks, and things the user expects the assistant to follow up on.\n")
+	b.WriteString("- Drop anything resolved or obsolete, including items in the previous summary that later messages completed or superseded. Merge the previous summary with the new messages rather than appending to it.\n")
+	b.WriteString("- Drop greetings, small talk, routine state chatter, intermediate steps, and redundant detail.\n")
 	b.WriteString("- Drop window/workspace events, windows do not survive compaction.\n")
+	b.WriteString("- Convert relative time references (\"tomorrow\", \"next week\") to absolute dates using the message timestamps (when possible), since the summary will be read later.\n")
 	b.WriteString("- No dialogue formatting; write an objective account of what happened.\n")
 	b.WriteString("- Do not invent information that is not present.\n")
+	b.WriteString("- Keep it brief. A short exchange warrants a few sentences, not paragraphs.\n")
 	b.WriteString("- Output only the summary: no preamble, no labels, no Markdown fences.")
 
 	return b.String()
