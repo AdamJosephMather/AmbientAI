@@ -17,11 +17,16 @@ type transcriptionRequest struct {
 	Model      string     `json:"model"`
 	InputAudio inputAudio `json:"input_audio"`
 	Language   string     `json:"language,omitempty"`
+	Provider   *provider   `json:"provider,omitempty"`
 }
 
 type inputAudio struct {
 	Data   string `json:"data"`
 	Format string `json:"format"`
+}
+
+type provider struct {
+	Sort   string `json:"sort"`
 }
 
 type transcriptionResponse struct {
@@ -128,6 +133,9 @@ func (t *Transcriber) Transcribe(
 			Format: "wav",
 		},
 		Language: t.Config.Language,
+		Provider: &provider{
+			Sort: "latency",
+		},
 	}
 
 	body, err := json.Marshal(requestData)
