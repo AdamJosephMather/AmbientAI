@@ -50,8 +50,8 @@ func lastMessageEvent(events []Event) *Event {
 
 // shouldCompact reports whether the last message was sent more than
 // afterHours hours ago.
-func shouldCompact(last *Event, now time.Time, afterHours int) bool {
-	if last == nil || afterHours <= 0 {
+func shouldCompact(last *Event, now time.Time, afterHours, taillen int) bool {
+	if last == nil || afterHours <= 0 || taillen < 8 { // we don't compact if it was less than X messages sent (to avoid compaction for no reason)
 		return false
 	}
 	return now.Unix()-last.Time.Unix() > int64(afterHours)*3600
@@ -128,8 +128,10 @@ func prepareHistory(now time.Time, compactAfterHours, maxCompactTokens int, aiNa
 
 	compaction, tail := latestCompaction(events)
 	lastMessage := lastMessageEvent(events)
+	
+	println("lentail", len(tail))
 
-	if lastMessage != nil && shouldCompact(lastMessage, now, compactAfterHours) {
+	if lastMessage != nil && shouldCompact(lastMessage, now, compactAfterHours, len(tail)) {
 		prior := ""
 		if compaction != nil {
 			prior = compaction.Content
